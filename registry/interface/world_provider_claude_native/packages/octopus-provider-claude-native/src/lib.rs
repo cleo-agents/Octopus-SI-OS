@@ -1,0 +1,25 @@
+mod child;
+mod config;
+
+pub use child::{ChildError, Event, Item, ItemKind, ReadyInfo, SdkChild, SessionConfig, TextInput, ToolSpec, TurnStatus, Usage};
+pub use config::{ClaudeNativeConfig, SDK_CHILD_PROTOCOL, verify_sdk_child};
+
+use octopus_descriptors::InterfaceId;
+
+pub fn doctor() -> Result<(), String> {
+    let interface = std::env::var("OCTOPUS_INTERFACE_ID")
+        .map(InterfaceId::new)
+        .map_err(|_| "OCTOPUS_INTERFACE_ID is required by the doctor contract".to_string())?;
+    let interface_dir = std::env::var_os("OCTOPUS_INTERFACE_DIR")
+        .map(std::path::PathBuf::from)
+        .ok_or("OCTOPUS_INTERFACE_DIR is required by the doctor contract")?;
+    let descriptor = octopus_world_pyecho_life_runtime::interface_descriptor_from_process_env(&interface)?
+        .ok_or_else(|| {
+            format!(
+                "{} is required by the doctor contract",
+                octopus_interface_transport::RESOLVED_INTERFACE_DESCRIPTOR_ENV
+            )
+        })?;
+    let config = ClaudeNativeConfig::from_descriptor(&descriptor)?;
+    verify_sdk_child(&config.sdk_child_executable(&interface_dir)?)
+}
