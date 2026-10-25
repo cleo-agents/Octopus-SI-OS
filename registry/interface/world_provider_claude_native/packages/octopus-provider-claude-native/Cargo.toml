@@ -32,4 +32,5 @@ octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
 
 [dev-dependencies]
 tempfile = "3"
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 sha2 = "0.10"

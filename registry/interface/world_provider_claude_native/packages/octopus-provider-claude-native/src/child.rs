@@ -98,7 +98,7 @@ pub enum Event {
     Session { session: String, claude_session_id: String, model: String, tools: Vec<String> },
     Item { session: String, turn: String, item: Item },
     ToolCall { session: String, turn: String, call_id: String, name: String, input: serde_json::Map<String, Value> },
-    Usage { session: String, turn: String, usage: Usage, total_cost_usd: f64, duration_ms: f64, num_turns: u64 },
+    Usage { session: String, turn: String, usage: Usage, total_cost_usd: serde_json::Number, duration_ms: serde_json::Number, num_turns: u64 },
     TurnEnd { session: String, turn: String, status: TurnStatus, result: Option<String>, claude_session_id: Option<String> },
     Error { request_id: Option<u64>, session: Option<String>, turn: Option<String>, code: String, message: String, fatal: bool },
 }
