@@ -471,14 +471,35 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
     }
   }
 
+  function providerCompilerReceipts(registry) {
+    const interfaces = path.join(registry, "interface");
+    if (!fs.existsSync(interfaces)) return [];
+    const receipts = [];
+    const pending = fs.readdirSync(interfaces).sort()
+      .map((owner) => path.join(interfaces, owner, "packages"))
+      .filter((packages) => fs.existsSync(packages));
+    while (pending.length) {
+      const directory = pending.shift();
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const candidate = path.join(directory, entry.name);
+        if (!registryCopyFilter(candidate) || entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) pending.push(candidate);
+        else if (entry.isFile() && entry.name === "build-receipt.json") receipts.push(candidate);
+      }
+    }
+    return receipts;
+  }
+
   function captureProviderSigningInputs(registries) {
     const records = [];
     for (const registry of registries) {
-      const provider = path.join(registry, "interface", "world_provider_codex", "packages", "octopus-provider-codex");
-      if (!fs.existsSync(provider)) continue;
-      for (const owner of [provider, path.join(provider, "intake"), path.join(provider, "opencodex-bridge")]) {
-        const receiptPath = path.join(owner, "build-receipt.json");
+      for (const receiptPath of providerCompilerReceipts(registry)) {
+        const owner = path.dirname(receiptPath);
         const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+        if (receipt?.schema_version !== 1 || typeof receipt.executable !== "string"
+          || path.isAbsolute(receipt.executable) || receipt.executable.split("/").some((part) => !part || part === "." || part === "..")) {
+          throw new Error(`Provider compiler receipt does not name an owned executable: ${receiptPath}`);
+        }
         const executable = path.join(owner, receipt.executable);
         const bytes = fs.readFileSync(executable);
         if (bytes.length !== receipt.executable_bytes || crypto.createHash("sha256").update(bytes).digest("hex") !== receipt.executable_sha256) {
