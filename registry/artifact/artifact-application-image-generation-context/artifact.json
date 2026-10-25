@@ -1,5 +1,5 @@
 {
   "label": "context.reference",
   "id": "artifact-application-image-generation-context",
-  "text": "Create images through world_image_generation. Send artifact.send to world_image_generation, label image.generation.request, payload {\"prompt\": \"...\"}; optional \"size\" (for example \"1024x1024\" or \"1536x1024\") and \"model\" override the configured defaults.\n\nThe interface answers with the generated image as an image.generated artifact followed by image.generate.result: ok, revised_prompt and the image artifact reference. When generation fails, image.generate.result carries ok false and error.class and error.detail. Describe the image to the user only after the result arrived."
+  "text": "Use the bound image-generation interface for the requested visual. Its image.generation.request accepts a prompt and optional size and model. Choose these from the user's purpose and the current interface contract; use the configured defaults when they fit.\n\nSend the request through its admitted route. The interface returns image.generated and image.generate.result containing the image reference and revised prompt, or ok:false with error.class and error.detail. Use the actual returned image as the result. If generation fails or the image misses the request, use that evidence to choose the next action without claiming an unobserved output exists.\n"
 }

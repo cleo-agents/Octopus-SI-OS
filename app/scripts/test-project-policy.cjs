@@ -30,7 +30,7 @@ let readiness, chooseAccess;
 })(source);
 function selection(patch = {}) {
   const worker = { id: "worker", applications: [], drivers: [{ name: "files", rootSlots: ["host_filesystem_root"], doorInterfaces: ["door"], tools: [], hostSlots: {} }], externalInputs: [], externalRelays: [], modelOutputs: [], selectedTools: [], contextArtifactBindings: [], payloadArtifactBindings: [], doorHostSlots: {} };
-  const context = { eeId: "project", hostRootRefs: { host_filesystem_root: "/" }, workers: [worker] };
+  const context = { eeId: "project", fullAccessRoot: "/", hostRootRefs: { host_filesystem_root: "/" }, workers: [worker] };
   const state = { ...capabilities, executionContextsLoaded: true, providerInterfacesLoaded: true,
     pendingNewTaskTargetRef: { current: null }, activeRunIdRef: { current: "" }, newTaskTargetResolutionBlocked: false,
     selectedClientAgent: { id: "agent", projectEeId: "project", workerInterfaceId: "worker" }, selectedWorker: worker,
@@ -47,9 +47,29 @@ test("Full access waits for matching loaded selections and still refuses unsuppo
     assert.equal(state.mode, "project_access"); assert.equal(state.error, "");
   }
   const valid = selection(); valid.chooseTaskAccessMode("full_access"); assert.equal(valid.mode, "full_access");
-  for (const mutate of [s => { s.driverNames = []; }, s => { s.selectedWorker.drivers[0].rootSlots = []; }, s => { s.executionContexts[0].hostRootRefs = {}; }, s => { s.selectedWorker.drivers[0].hostSlots = { host_filesystem_root: "/limited" }; }]) {
+  for (const mutate of [s => { s.driverNames = []; }, s => { s.selectedWorker.drivers[0].rootSlots = []; }, s => { s.executionContexts[0].fullAccessRoot = ""; }, s => { s.selectedWorker.drivers[0].hostSlots = { host_filesystem_root: "/limited" }; }]) {
     const state = selection(); mutate(state); state.chooseTaskAccessMode("full_access");
     assert.equal(state.mode, "project_access"); assert.ok(state.error);
     assert.ok(capabilities.taskFullAccessSelectionFailure(state.executionContexts[0], state.selectedWorker, [], state.driverNames));
   }
+});
+
+test("tasks require an explicit working folder without blocking access-mode selection", () => {
+  const state = selection();
+  const context = state.executionContexts[0], worker = state.selectedWorker;
+  worker.drivers[0].rootSlots.push("workspace_root");
+  context.fullAccessRoot = "/";
+  const prepare = mode => capabilities.executionContextTaskCapabilities([context], context.eeId, worker.id, [], ["files"], mode);
+  assert.match(prepare("project_access").workspaceSelectionError, /no working folder/);
+  assert.equal(prepare("full_access").workspaceSelectionError, "");
+  assert.equal(prepare("full_access").doorHostSlots.door.workspace_root, "/");
+  context.sourceFolders = ["/project"];
+  assert.equal(prepare("project_access").workspaceSelectionError, "");
+  assert.equal(prepare("project_access").doorHostSlots.door.workspace_root, "/project");
+  context.sourceFolders = [];
+  context.hostRootRefs.workspace_root = "/configured";
+  assert.equal(prepare("project_access").workspaceSelectionError, "");
+  delete context.hostRootRefs.workspace_root;
+  worker.doorHostSlots = { door: { workspace_root: "/agent" } };
+  assert.equal(prepare("project_access").workspaceSelectionError, "");
 });

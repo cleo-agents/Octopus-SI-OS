@@ -34,6 +34,23 @@ fn shipped_native_catalogs_accept_the_exact_artifact_reference_wire() {
 mod support;
 
 #[test]
+fn validation_report_retains_failures_without_repeating_registry_snapshots() {
+    let issue = json!({"subject":"run/task", "checkpoint":"result", "reason":"missing receiving role"});
+    let stage = json!({"after_write":1, "available":vec!["interface/repeated-owner"; 400], "issues":[issue.clone()]});
+    let mut validation: RegistryCandidateValidation = serde_json::from_value(json!({
+        "safe_to_apply":false, "checked_subjects":vec!["interface/repeated-owner"; 400],
+        "stages":vec![stage; 80], "regressions":[issue.clone()],
+    })).unwrap();
+    validation.stages[0].issues.push(RegistryValidationIssue { subject: "interface/resolved".into(), checkpoint: None, reason: "dependency not written yet".into() });
+    let report = validation_report(&validation);
+    assert_eq!(report["safe_to_apply"], false);
+    assert_eq!(report["regressions"], json!([issue.clone()]));
+    assert_eq!(report["issues"], json!([issue]));
+    assert_eq!(report["publication_stage_count"], 80);
+    assert!(serde_json::to_vec(&report).unwrap().len() < 1024);
+}
+
+#[test]
 fn native_creation_routes_use_authored_defaults_and_explicit_empty_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let request = support::fixture(temp.path());

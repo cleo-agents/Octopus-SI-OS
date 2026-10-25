@@ -30,12 +30,20 @@ Memory is written in two ways:
    trigger (recommended in the Codex pack, armed by setup with a three-hour
    quiet period) starts an ordinary task in
    Home's environment: it lists the notes with their usage, merges duplicates,
-   settles contradictions in favour of the newer note and folds stale, unused
-   notes into what is still true. Both are ordinary runs started by
+   settles contradictions using their sources and the user's latest applicable
+   decisions, and folds stale, unused notes into what is still true. A newer
+   note is not automatically stronger evidence. Both are ordinary runs started by
    interfaces.
 
 The resulting entries become visible only to runs whose bindings and formed
 policy admit them.
+
+Knowledge entries describe what was observed and the conditions under which it
+applies. A prepared plan, an installed configuration and a successful execution
+support different claims. Material uncertainty belongs in the description as
+well as the content, so discovery does not present an untested procedure as
+proven. Capturing or consolidating experience preserves these limits. A useful
+failure may be saved without recasting it as a solution.
 
 The projection's byte limit covers the complete artifact, including its model
 text and any original input attached after source verification. When it is too
@@ -122,6 +130,12 @@ After a successful run, another run can notice the world changed - a module was
 added - and update the relevant skill so the next run sees the new reality.
 That update is an ordinary worker run editing an artifact. It is not a skill
 subsystem.
+
+Role and skill artifacts explain their purpose, the relevant entry points and
+where to read exact contracts. The model follows the affected producers,
+consumers and related state, adapting its investigation and verification to the
+task. Schemas and detailed operation examples remain available on demand;
+general instructions do not repeat them or prescribe a universal checklist.
 
 The registry ships `skill.capture`, `skill.upsert`, `skill.search`,
 `skill.list`, and `skill.get` as **ordinary tools** behind the system room's

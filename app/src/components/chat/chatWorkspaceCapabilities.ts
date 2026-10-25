@@ -392,6 +392,10 @@ export function executionContextTaskCapabilities(
   }
   return {
     doorHostSlots,
+    workspaceSelectionError: selectedDrivers.some((driver) => driver.rootSlots.includes("workspace_root")
+      && driver.doorInterfaces.some((door) => !doorHostSlots[door]?.workspace_root && !context?.hostRootRefs.workspace_root))
+      ? "This task has no working folder. Choose a project folder or change the task's access settings."
+      : "",
     externalInputs,
     externalRelays,
     modelOutputs,

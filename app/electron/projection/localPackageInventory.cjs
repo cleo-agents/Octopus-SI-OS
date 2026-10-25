@@ -25,6 +25,7 @@ async function mutateLocalPackageInventory(
       "local package library",
     ),
     stateRoot: path.join(octopusHomeRoot, "client", "package-state"),
+    publication: hooks.localPackagePublication,
   };
   const operationId = requiredApplicationOperationId(request?.operationId);
   const onProgress = (progress) => reportLocalPackageProgress(

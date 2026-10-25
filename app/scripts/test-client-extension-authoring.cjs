@@ -12,6 +12,38 @@ const appRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(appRoot, "..");
 const authoring = require("../../registry/artifact/artifact-home-widget-authoring/artifact.json");
 const catalogue = require("../../registry/tool/client.mcp/tool.json");
+test("sandbox widgets inherit the client scrollbar and resize handles exclude background ripples", async () => {
+  const { JSDOM } = require("jsdom");
+  const dom = new JSDOM("<!doctype html><html></html>", { url: "https://fixture.invalid" });
+  const previous = new Map(["document", "window", "localStorage", "getComputedStyle"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.defineProperties(globalThis, { document: { configurable: true, value: dom.window.document }, window: { configurable: true, value: dom.window }, localStorage: { configurable: true, value: dom.window.localStorage }, getComputedStyle: { configurable: true, value: dom.window.getComputedStyle.bind(dom.window) } });
+  try {
+    const built = require("esbuild").buildSync({ stdin: { contents: 'export { ClientSurfaceRenderer } from "./src/client-surfaces/ClientSurfaceRenderer"; export { SCENE_RIPPLE_IGNORED_TARGETS } from "./src/components/voice/sceneRipple";', resolveDir: appRoot },
+      bundle: true, platform: "node", format: "cjs", write: false, logOverride: { "ignored-bare-import": "silent" }, external: ["react", "react-dom", "motion/react"], define: { "import.meta.env.DEV": "false" }, loader: { ".css": "text" } });
+    const owner = { exports: {} };
+    Function("module", "exports", "require", built.outputFiles[0].text)(owner, owner.exports, require);
+    const document = structuredClone(require("../src/client-surfaces/home-widget-authoring.json").example);
+    document.render = { kind: "sandbox", html: "<div style='overflow:auto;height:40px'>Widget content</div>" };
+    for (const theme of ["light", "dark"]) {
+      dom.window.document.documentElement.dataset.theme = theme;
+      for (const state of ["background", "hover-background", "active-background"]) dom.window.document.documentElement.style.setProperty(`--color-token-scrollbar-slider-${state}`, theme === "dark" ? "rgb(255 255 255 / 20%)" : "rgb(0 0 0 / 20%)");
+      const html = require("react-dom/server").renderToStaticMarkup(require("react").createElement(owner.exports.ClientSurfaceRenderer, { accessProfile: "live", admitted: { document, sourceDigest: "test" } }));
+      const rendered = new JSDOM(html);
+      const frame = rendered.window.document.querySelector("iframe");
+      assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
+      assert.ok(frame.srcdoc.includes(await fs.readFile(path.join(appRoot, "src/design-system/scrollbars.css"), "utf8")));
+      assert.ok(frame.srcdoc.includes(`--color-token-scrollbar-slider-background:${theme === "dark" ? "rgb(255 255 255 / 20%)" : "rgb(0 0 0 / 20%)"}`));
+      const handles = rendered.window.document.querySelectorAll(".voice-widget-resize-handle");
+      assert.equal(handles.length, 4);
+      for (const handle of handles) assert.equal(handle.closest(owner.exports.SCENE_RIPPLE_IGNORED_TARGETS), handle);
+      assert.equal(rendered.window.document.body.closest(owner.exports.SCENE_RIPPLE_IGNORED_TARGETS), null);
+      rendered.window.close();
+    }
+  } finally {
+    for (const [key, descriptor] of previous) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
+    dom.window.close();
+  }
+});
 const documentSchema = require("../schemas/client_surface_document.schema.json");
 const bundled = require("esbuild").buildSync({
   stdin: {

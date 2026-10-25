@@ -23,11 +23,15 @@ export function parseClientAction(value) {
     throw new Error("Client action requires exact octopus.client_action v1 data.");
   }
   if (value.action === "open_surface" && Object.keys(value).length === 4 && text(value.surface_id)) return value;
+  if (value.action === "open_file" && Object.keys(value).length === 5 && text(value.request_id)
+    && typeof value.path === "string" && value.path.length <= 4096 && value.path.trim() === value.path
+    && /^(?:\/|[A-Za-z]:[\\/])/.test(value.path) && !/[\u0000-\u001f\u007f]/.test(value.path)
+    && !value.path.split(/[\\/]/).some(part => part === "." || part === "..")) return value;
   if (value.action === "list_widgets" && Object.keys(value).length === 4 && text(value.request_id)) return value;
   if (value.action === "set_widget" && Object.keys(value).length === 5 && text(value.request_id) && widgetChanges(value.changes, text)) return value;
   if (value.action === "inspect_client" && text(value.request_id) && inspectionScope(value)) return value;
   if (value.action === "relaunch_client" && Object.keys(value).length === 4 && text(value.request_id)) return value;
-  throw new Error("Client action must be an exact open_surface, list_widgets, set_widget, inspect_client or relaunch_client request.");
+  throw new Error("Client action must be an exact open_surface, open_file, list_widgets, set_widget, inspect_client or relaunch_client request.");
 }
 
 function inspectionScope(value) {

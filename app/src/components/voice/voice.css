@@ -2340,8 +2340,12 @@
 }
 
 .home-call__caption {
-  display: -webkit-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   max-width: min(100%, 520px);
+  max-height: 44px;
+  min-height: 0;
   min-width: 0;
   margin: 0 0 clamp(2px, 2cqh, 14px);
   overflow: hidden;
@@ -2352,9 +2356,12 @@
   text-align: center;
   text-shadow: 0 1px 4px var(--voice-bg), 0 0 12px var(--voice-bg);
   text-wrap: balance;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   animation: home-call-fade 320ms cubic-bezier(.2, .7, .3, 1) both;
+}
+
+.home-call__caption-text {
+  flex: none;
+  margin: 0;
 }
 
 .home-call__caption-speaker {

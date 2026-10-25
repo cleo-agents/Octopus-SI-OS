@@ -28,6 +28,7 @@ import { PanelResizeHandle, useAnimatedPanelSize } from "../shell/PanelResizeHan
 import { FilesCodeEditor } from "./FilesCodeEditor";
 import { FilesBreadcrumb } from "./FilesBreadcrumb";
 import type { FilesOpenTarget } from "./types";
+import { resolveFileTarget } from "./fileTarget";
 import { ensureFilesPane, hasFilesPane, readFilesPane, registerFilesPaneFlush, saveFilesPane, subscribeFilesPane, updateFilesPane } from "./filesPaneLifecycle";
 import { filesRootMatches, type FilesEditorViewState, type FilesPaneSnapshot } from "./filesPaneSnapshot";
 import "../artifacts/artifact-workbench.css";
@@ -746,28 +747,6 @@ export function FilesView({ accessProfile, active, paneKey, snapshot: initialSna
       </SetupDialogShell>
     </section>
   );
-}
-
-function resolveFileTarget(
-  target: Extract<FilesOpenTarget, { kind: "file" }>,
-  roots: OctopusOsFileRoot[],
-): { path: string; rootId: string } | null {
-  if (target.rootId && target.path !== undefined) {
-    return roots.some((root) => root.id === target.rootId)
-      ? { path: target.path, rootId: target.rootId }
-      : null;
-  }
-  const absolutePath = target.absolutePath?.replaceAll("\\", "/");
-  if (!absolutePath) return null;
-  const root = roots
-    .map((candidate) => ({ candidate, path: candidate.path.replaceAll("\\", "/").replace(/\/+$/, "") }))
-    .filter(({ path }) => absolutePath === path || absolutePath.startsWith(`${path}/`))
-    .sort((left, right) => right.path.length - left.path.length)[0];
-  if (!root) return null;
-  return {
-    path: absolutePath === root.path ? "" : absolutePath.slice(root.path.length + 1),
-    rootId: root.candidate.id,
-  };
 }
 
 function filesOpenTargetKey(target: FilesOpenTarget | undefined): string {

@@ -8,7 +8,8 @@ export type InspectClientAction = {
   source?: { method: string; params?: Record<string, unknown>; path?: string };
 };
 export type RelaunchClientAction = { schema: "octopus.client_action"; schema_version: 1; request_id: string; action: "relaunch_client" };
-export type ClientResultAction = WidgetAction | InspectClientAction | RelaunchClientAction;
+export type OpenFileAction = { schema: "octopus.client_action"; schema_version: 1; request_id: string; action: "open_file"; path: string };
+export type ClientResultAction = WidgetAction | InspectClientAction | RelaunchClientAction | OpenFileAction;
 export type ClientAction = ClientResultAction | {
   schema: "octopus.client_action"; schema_version: 1; action: "open_surface"; surface_id: string;
 };

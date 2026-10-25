@@ -47,6 +47,9 @@ work concretely. It is not shown in the conversation.
 Open **Activity** for the conversation and the detailed trace of its work.
 Widgets can show task progress, upcoming work, or other configured sources;
 their visibility and positions are client presentation choices.
+Home also uses compact widgets for pictures, small tables and short visual
+answers. Larger results can use several widgets. For longer text, Home can save
+a text or Markdown document and open it in the right Files pane.
 
 ![Home conversation beside a Files pane showing a local client configuration](images/client/home-files.png)
 
@@ -97,6 +100,10 @@ or use **Make primary** to choose the working directory. Tasks created afterward
 use that Primary folder and can work in the other selected folders within their
 configured access. **Full access** keeps those folders as working context and
 uses its separately selected filesystem permissions.
+
+Filesystem tools require a working folder from the selected project, Agent or
+host configuration. When none is configured, the composer explains the missing
+folder before submission; changing access settings remains available.
 
 If a manual message cannot be sent, its text returns to the composer and the
 usual error notification explains the failure. Delivery with a lost confirmation

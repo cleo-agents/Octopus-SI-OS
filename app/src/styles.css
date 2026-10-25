@@ -1,3 +1,5 @@
+@import "./design-system/scrollbars.css";
+
 .welcome {
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   position: fixed;
@@ -6376,45 +6378,6 @@ button[data-gesture-focus][data-gesture-focused] {
   text-rendering: optimizeLegibility;
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-token-scrollbar-slider-background) transparent;
-}
-
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-*::-webkit-scrollbar-track,
-*::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-*::-webkit-scrollbar-thumb {
-  background: var(--color-token-scrollbar-slider-background);
-  border-radius: 9999px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
-}
-
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--color-token-scrollbar-slider-hover-background);
-  border: 3px solid transparent;
-  background-clip: padding-box;
-}
-
-*::-webkit-scrollbar-thumb:active {
-  background: var(--color-token-scrollbar-slider-active-background);
-  border: 3px solid transparent;
-  background-clip: padding-box;
-}
-
-*::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
-}
 
 .hide-scrollbar {
   scrollbar-width: none;

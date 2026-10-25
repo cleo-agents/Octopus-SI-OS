@@ -839,6 +839,14 @@ export function useChatWorkspace(
         accessMode,
       )
     : "";
+  const workspaceSelectionError = useMemo(() => {
+    if (activeRunId || !capabilitySelectionReady || selectedClientAgentCapabilityFailure) return "";
+    try {
+      return executionContextTaskCapabilities(executionContexts, eeId, workerInterfaceId, applicationIds, driverNames, accessMode).workspaceSelectionError;
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : String(failure);
+    }
+  }, [activeRunId, capabilitySelectionReady, selectedClientAgentCapabilityFailure, executionContexts, eeId, workerInterfaceId, applicationIds, driverNames, accessMode]);
   const clientAgentSelectionReady = Boolean(
     selectedClientAgent
     && !selectedClientAgentFailure
@@ -1236,9 +1244,11 @@ export function useChatWorkspace(
                   : !executionContextReady
                     ? executionContextError || (!executionContextsLoaded ? "Loading task capabilities…" : "")
                       || selectedClientAgentCapabilityFailure || newTaskAuthoringError || "Choose an Agent available in a projected execution environment."
-                    : !hasSubmissionPayload
-                      ? "Type a message or attach a file."
-                      : "";
+                    : workspaceSelectionError
+                      ? workspaceSelectionError
+                      : !hasSubmissionPayload
+                        ? "Type a message or attach a file."
+                        : "";
   const editingQueuedTurn = queuedTurns.find((item) => item.runKey === activeRunKey && item.status === "editing" && item.messageId === draftMessageId && item.editOwner === queueOwner.id);
   const canSubmit = !activeRun?.archived && (Boolean(editingQueuedTurn && queueReady && hasSubmissionPayload) || submitBlockReason === "");
   const canQueue = enabled && runtimeReady && queueReady && activeRun?.writable === true && canQueueOnActiveRun && hasSubmissionPayload && providerDeclared && !providerInterfacesRefreshing && !providerInterfaceError && reasoningSelectionValid && serviceTierSelectionValid;
@@ -2082,6 +2092,7 @@ export function useChatWorkspace(
                 turn.driverNames,
                 turn.accessMode,
               );
+          if (taskCapabilities?.workspaceSelectionError) throw new Error(taskCapabilities.workspaceSelectionError);
           if (!deliveryStillAllowed(owner, turn.runId, !turn.manual)) {
             await queueStore.settle(queueId, owner, turn.manual ? "failed" : "queued", turn.manual ? "The sending view or task state changed before submission. This message was not sent." : undefined);
             replaceRunPending(turn.runKey, []);

@@ -3,6 +3,8 @@ import { readProjection, submitInterfaceArtifact } from "../projectionClient";
 import { parseClientAction, type InspectClientAction, type WidgetAction } from "../../electron/clientActionSemantics.mjs";
 import { useProjectionGeneration } from "../projectionLive";
 import type { ClientSurfaceDescriptor } from "./surfaceTypes";
+import { prepareClientFile } from "../components/files/fileTarget";
+import type { FilesOpenTarget } from "../components/files/types";
 
 type ActionScope = { home: string; runId: string; interfaceId: string };
 type DeliveryIdentity = {
@@ -16,6 +18,7 @@ type ClientActionOptions = ActionScope & {
   enabled: boolean;
   surfaces: readonly ClientSurfaceDescriptor[];
   openSurface: (surface: ClientSurfaceDescriptor) => void;
+  openFile?: (target: FilesOpenTarget) => void;
   widgets?: (action: WidgetAction, operationId: string) => Promise<unknown>;
   inspect?: (action: InspectClientAction) => Promise<Record<string, unknown>>;
   relaunch?: () => Promise<unknown>;
@@ -148,7 +151,7 @@ export function useAdmittedClientActions(options: ClientActionOptions): void {
                   || typeof receipt.observed_at !== "string" || !Number.isFinite(Date.parse(receipt.observed_at))
                   || !["prepared", "completed"].includes(String(receipt.phase))
                   || receipt.phase === "completed" && (typeof receipt.ok !== "boolean"
-                    || (receipt.ok ? !Array.isArray(receipt.widgets) && !isRecord(receipt.client) && !isRecord(receipt.relaunch) : typeof receipt.error !== "string"))) {
+                    || (receipt.ok ? !Array.isArray(receipt.widgets) && !isRecord(receipt.client) && !isRecord(receipt.relaunch) && !isRecord(receipt.opened) : typeof receipt.error !== "string"))) {
                   throw new Error("Saved widget action result is malformed.");
                 }
                 if (receipt.request_artifact !== identity.artifact_id || receipt.request_seq !== identity.seq
@@ -178,7 +181,14 @@ export function useAdmittedClientActions(options: ClientActionOptions): void {
                   if (typeof row.expires_at_ms !== "number" || Date.now() >= row.expires_at_ms) {
                     throw new Error("This client control expired before execution. No action was performed.");
                   }
-                  if (action.action === "inspect_client") {
+                  if (action.action === "open_file") {
+                    if (!latest.current.openFile) throw new Error("File viewing is unavailable.");
+                    const preparedFile = await prepareClientFile(action.path);
+                    if (!current()) return;
+                    if (Date.now() >= row.expires_at_ms) throw new Error("This file request expired before opening.");
+                    latest.current.openFile(preparedFile.target);
+                    receipt = { ...base, phase: "completed", ok: true, opened: preparedFile.opened };
+                  } else if (action.action === "inspect_client") {
                     if (!latest.current.inspect) throw new Error("Client inspection is unavailable.");
                     receipt = { ...base, phase: "completed", ok: true, client: await latest.current.inspect(action) };
                   } else if (action.action === "relaunch_client") {

@@ -1584,6 +1584,62 @@
           }
         },
         {
+          "name": "open_file",
+          "description": "Open an existing text file or Markdown document in the running client's right Files pane. Create or update the file first through granted file tools, then provide its absolute path. Use client_action.interface from the bound Home delivery context and a unique request_id. The client checks its admitted Files roots and reads the file before selecting its tab. Missing, unreadable, binary or oversized files fail explicitly. This call waits for the client result; opening confirms the readable target and tab request, not rendered pixels. It does not execute the file, launch another application or restart the client.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "interface": {
+                "type": "string",
+                "minLength": 1
+              },
+              "action": {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "const": "octopus.client_action"
+                  },
+                  "schema_version": {
+                    "const": 1
+                  },
+                  "action": {
+                    "const": "open_file"
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "schema",
+                  "schema_version",
+                  "action",
+                  "request_id",
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "interface",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "operation": {
+            "kind": "emit",
+            "label": "client.action",
+            "payload_argument": "action",
+            "await_client_result": true
+          }
+        },
+        {
           "name": "inspect_client",
           "description": "Inspect the running Octopus client before writing an Extension or its data source. Read-only. The client returns client.action.result with request_id and client: the Extensions root, packages_root and package layout, contract schema files written by this client build, host vocabulary (categories, targets, slots, native nodes, glyphs, projection sources with params, host sources, client actions, limits), visible surfaces, every Extension with admission (pending/reviewed/dismissed/builtin), installation, setup and runtime issues, and refused packages with exact issues. extension_id narrows the Extension rows to one package. source previews what one client surface projection returns, bounded, so bindings can be written against real rows. Use client_action.interface from the bound Home delivery context and a unique request_id.  This call waits for the running client and returns the actual saved state or an explicit failure. Continue dependent work from this result in the same turn. Do not end the turn to wait, poll, repeat an admitted request, or use Computer Use for these controls.",
           "input_schema": {
@@ -1845,7 +1901,7 @@
       ]
     }
   },
-  "description": "Octopus client MCP. Call with method tools/call and params {name, arguments}. For existing widgets, the complete arguments are {interface, action:{schema:\"octopus.client_action\",schema_version:1,action:\"list_widgets\",request_id:\"new unique id\"}}. Copy interface from client_action.interface in the bound Home delivery artifact. To change the returned inventory, use name:\"set_widget\" and action:\"set_widget\" with changes:[{widget_id,source_digest,state:\"visible\"|\"hidden\"|\"removed\"}]; copy exact widget ids and digests from list_widgets. Both calls return actual saved client state in this tool call. No document-authoring guide or full catalogue read is needed for these controls. Use tools/list for other operations: inspect_client reports client/Extension contracts, publish_widget creates a document, open_client_surface opens an existing view, and artifact operations inspect only bound artifacts. Effects cross artifact.send under the current grant. No ambient host configuration or global client access.",
+  "description": "Octopus client MCP. Call with method tools/call and params {name, arguments}. For existing widgets, the complete arguments are {interface, action:{schema:\"octopus.client_action\",schema_version:1,action:\"list_widgets\",request_id:\"new unique id\"}}. Copy interface from client_action.interface in the bound Home delivery artifact. To change the returned inventory, use name:\"set_widget\" and action:\"set_widget\" with changes:[{widget_id,source_digest,state:\"visible\"|\"hidden\"|\"removed\"}]; copy exact widget ids and digests from list_widgets. Both calls return actual saved client state in this tool call. No document-authoring guide or full catalogue read is needed for these controls. Use tools/list for other operations: inspect_client reports client/Extension contracts, publish_widget creates a document, open_client_surface opens an existing view, open_file opens a text document in the right Files pane, and artifact operations inspect only bound artifacts. Effects cross artifact.send under the current grant. No ambient host configuration or global client access.",
   "args_schema": {
     "type": "object",
     "properties": {

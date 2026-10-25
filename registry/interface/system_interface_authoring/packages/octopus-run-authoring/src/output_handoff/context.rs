@@ -389,7 +389,9 @@ impl ProviderOutputHandoff {
                     && {
                         let recovered_refs = recovered.iter().map(|entry| artifact_ref_key(&entry.source_artifact)).collect::<BTreeSet<_>>();
                         let existing_refs = context.artifacts.iter().map(|entry| artifact_ref_key(&entry.source_artifact)).collect::<BTreeSet<_>>();
-                        !existing_refs.is_subset(&recovered_refs) && !recovered_refs.is_subset(&existing_refs)
+                        !recovered_refs.is_subset(&existing_refs)
+                            && context.artifacts.iter().zip(&recovered)
+                                .any(|(existing, candidate)| existing.source_artifact != candidate.source_artifact)
                     }
                     && persisted_pending_handoff(record, &self.config.provider_interface)?
                         .map(|persisted| persisted.with_standing_items()).as_ref() == Some(pending)

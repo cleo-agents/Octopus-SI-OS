@@ -47,6 +47,11 @@ function createProjectionContext(options) {
   const runtimeLaunchEnvironment = typeof options.runtimeLaunchEnvironment === "function"
     ? options.runtimeLaunchEnvironment
     : () => null;
+  // The native publication boundary that recovers an interrupted package transaction found during
+  // a catalog read. A store without one can still read a Home whose package state is quiet.
+  const localPackagePublication = typeof options.localPackagePublication === "function"
+    ? options.localPackagePublication
+    : () => undefined;
   const store = {
     options,
     resolveRepoRoot,
@@ -59,6 +64,7 @@ function createProjectionContext(options) {
     nativeBrowserTargetsForProjection,
     nativeBrowserDownloadsForProjection,
     runtimeLaunchEnvironment,
+    localPackagePublication,
   };
   for (const projection of [invalidationProjection, queryRouterProjection, movementPagesProjection, clientSurfacesProjection, interfaceArtifactsProjection, runActivityProjection, configurationProjection, workerEnvironmentsProjection, descriptorRowsProjection, ledgerProjection, operatorChatIndexProjection, operatorOsProjection, operatorChatContextProjection, operatorChatTurnsProjection, operatorChatListProjection, operatorChatMessagesProjection, scheduledInterfacesProjection, topologyRowsProjection]) {
     Object.assign(store, projection(store));

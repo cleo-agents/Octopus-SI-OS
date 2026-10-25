@@ -18,11 +18,12 @@ fn mcp_lifecycle_catalogue_and_exact_calls_are_validated() {
     assert!(matches!(server.receive(json!({"jsonrpc":"2.0","method":"notifications/initialized"})), Reply::Notification));
     let Reply::Message(tools) = server.receive(list) else { panic!() };
     let names = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect::<Vec<_>>();
-    assert_eq!(names, ["list_artifacts","read_artifact","search_artifacts","publish_widget","open_client_surface","inspect_client","list_widgets","relaunch_client","set_widget"]);
+    assert_eq!(names, ["list_artifacts","read_artifact","search_artifacts","publish_widget","open_client_surface","open_file","inspect_client","list_widgets","relaunch_client","set_widget"]);
     let call = |name: &str, arguments: Value| json!({"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":name,"arguments":arguments}});
-    for name in ["list_widgets", "set_widget"] {
+    for name in ["list_widgets", "set_widget", "open_file"] {
         let mut action = json!({"schema":"octopus.client_action","schema_version":1,"action":name,"request_id":"widget-request"});
         if name == "set_widget" { action["changes"] = json!([{"widget_id":"builtin.voice.live-context","source_digest":"sha256:exact","state":"visible"}]); }
+        if name == "open_file" { action["path"] = json!("/workspace/Report.md"); }
         assert!(matches!(server.receive(call(name, json!({"interface":"target","action":action}))), Reply::Call { .. }));
         action["ambient_path"] = json!("/other-home");
         assert!(matches!(server.receive(call(name, json!({"interface":"target","action":action}))), Reply::Message(value) if value["error"]["code"] == -32602));

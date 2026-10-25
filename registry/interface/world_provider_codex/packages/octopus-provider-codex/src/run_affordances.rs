@@ -8,7 +8,7 @@ use octopus_ledger::{
 };
 use octopus_operator_chat_client::run_composition::{
     AuthoredRunComposition, AuthoredRunCompositionPlan, CollectionSelection, CompositionAuthoring,
-    CompositionCommunication, CompositionRoots, CompositionSeed, RegistryValidationIssue,
+    CompositionCommunication, CompositionRoots, CompositionSeed, RegistryCandidateValidation, RegistryValidationIssue,
     RegistryValidationRoots, RunCompositionPlan, RunCompositionRequest,
     composition_candidate_writes, plan_authored_run_composition, plan_run_composition,
     validate_registry_candidate, validate_run_authoring_source, validation_roots,
@@ -27,6 +27,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const PEER_MESSAGE_LABEL: &str = "provider.peer.message";
+
+fn validation_report(validation: &RegistryCandidateValidation) -> Value {
+    let issues = validation.stages.last().into_iter().flat_map(|stage| stage.issues.iter()).collect::<BTreeSet<_>>();
+    json!({
+        "safe_to_apply": validation.safe_to_apply,
+        "checked_subject_count": validation.checked_subjects.len(),
+        "publication_stage_count": validation.stages.len(),
+        "regressions": validation.regressions,
+        "issues": issues,
+        "scope": "Candidate declarations and formation. This does not establish execution or delivery.",
+    })
+}
 
 #[cfg(test)]
 #[path = "../tests/support/native_run_composition.rs"]
@@ -540,7 +552,7 @@ impl NativePending {
                         result: json!({
                             "ok":false,"installed":true,"seed_admitted":false,"work_completed":false,
                             "created":created,"files":files,"write_receipt":result,
-                            "validation":validation,"unmet_dependencies":unexpected,
+                            "validation":validation_report(&validation),"unmet_dependencies":unexpected,
                         }),
                     });
                 }
@@ -548,7 +560,7 @@ impl NativePending {
                     return Ok(NativeStep::Complete {
                         result: json!({
                             "ok":true,"installed":true,"seed_admitted":false,"work_completed":false,
-                            "created":created,"files":files,"write_receipt":result,"validation":validation,
+                            "created":created,"files":files,"write_receipt":result,"validation":validation_report(&validation),
                         }),
                     });
                 };
@@ -561,7 +573,7 @@ impl NativePending {
                             created: created.clone(),
                             files: files.clone(),
                             write_receipt: result.clone(),
-                            validation: json!(validation),
+                            validation: validation_report(&validation),
                         })?,
                         ..self.clone()
                     },
@@ -760,7 +772,7 @@ impl RunAffordances {
                 "ok":plan.validation.safe_to_apply, "preview":preview, "installed":false, "run_id":current.id,
                 "amendment_key":plan.amendment.amendment_key, "future_run_contract":plan.amendment.after,
                 "dependency_writes":plan.dependency_writes, "activation_writes":plan.activation_writes,
-                "bridge":plan.amendment.bridge, "validation":plan.validation, "awaiting_activation":plan.awaiting_activation, "work_completed":false,
+                "bridge":plan.amendment.bridge, "validation":validation_report(&plan.validation), "awaiting_activation":plan.awaiting_activation, "work_completed":false,
             }) });
         }
         let publication_read_refs = publication_read_refs(&plan.publication_evidence)?;
@@ -1076,7 +1088,7 @@ impl RunAffordances {
                 let inspected = validate_registry_candidate(&validation_roots(roots), &[])?;
                 Ok(NativeStep::Complete {
                     result: json!({
-                        "roots":roots,"defaults":self.config.defaults,"source_grant":metadata.grant,
+                        "roots":roots,"defaults":self.config.defaults,
                         "current_selection":current_selection(roots, parent_record, &runtime.interface)?,
                         "installed":inspected.stages[0],
                         "selection_contract":"Installed entries are candidates. Each run is validated against its own worker ceiling, EE chain and exact authored bindings; creation does not inherit the initiator grant.",
@@ -1326,7 +1338,7 @@ impl RunAffordances {
                 result: json!({
                     "ok":plan.validation.safe_to_apply,"preview":preview,"installed":false,"seed_admitted":false,
                     "creation_key":creation_key,"authored":plan.authored,"run_contract":plan.run,
-                    "validation":plan.validation,"work_completed":false,
+                    "validation":validation_report(&plan.validation),"work_completed":false,
                 }),
             });
         }

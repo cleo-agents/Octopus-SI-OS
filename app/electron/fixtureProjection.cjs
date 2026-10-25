@@ -843,7 +843,7 @@ function buildFixtureProjection() {
     ["home", "task.summary.received", 38], ["home", "operator.approval", 52],
     ["review", "tool.call.allowed", 95], ["review", "tool.call.allowed", 97], ["review", "tool.result.corresponds", 99],
     ["memory", "memory.experience.admitted", 26 * 60], ["projection", "memory.capture.completed", 26 * 60 + 2],
-    ["home", "operator.input.provided", 30 * 60], ["review", "hook.gate.passed", 4 * 24 * 60], ["task", "context.recipe.valid", 6 * 24 * 60],
+    ["home", "operator.input.provided", 30 * 60], ["task", "context.recipe.valid", 6 * 24 * 60],
   ];
   const marks = markPlan.map(([source, name, minutes], index) => {
     const origin = markSources[source];

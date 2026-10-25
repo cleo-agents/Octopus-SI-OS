@@ -31,8 +31,6 @@ export function HomeCallControls({ session, onStart, speakerEnabled, onSpeakerCh
   const showFailure = failures.length > 0 && failure !== dismissedFailure;
   const transcript = live ? session.transcript.filter((entry) => entry.text.trim()) : [];
   const latestUtterance = transcript.at(-1);
-  const captionCharacters = Array.from(latestUtterance?.text ?? "");
-  const captionText = `${captionCharacters.length > 160 ? "…" : ""}${captionCharacters.slice(-160).join("")}`;
   const showCaptions = session.phase === "listening" || muted || session.phase === "recovering";
   const transcriptOpen = panel === "transcript" && transcript.length > 0;
   const devicesOpen = panel === "devices" && live;
@@ -78,10 +76,12 @@ export function HomeCallControls({ session, onStart, speakerEnabled, onSpeakerCh
       setPanel(null);
     }}>{(present) => <>
       {live && showCaptions && latestUtterance && !transcriptOpen ? (
-        <p key={latestUtterance.id} aria-live="polite" aria-atomic="true" className={`home-call__caption is-${latestUtterance.role}`} title={latestUtterance.text}>
-          <span className="home-call__caption-speaker">{latestUtterance.role === "user" ? "You: " : "Home: "}</span>
-          {captionText}
-        </p>
+        <div key={latestUtterance.id} aria-live="polite" aria-atomic="true" className={`home-call__caption is-${latestUtterance.role}`} title={latestUtterance.text}>
+          <p className="home-call__caption-text">
+            <span className="home-call__caption-speaker">{latestUtterance.role === "user" ? "You: " : "Home: "}</span>
+            {latestUtterance.text}
+          </p>
+        </div>
       ) : null}
       {transcriptOpen ? (
         <section aria-label="Call transcript" className="home-call__sheet home-call__transcript" id={transcriptId} ref={transcriptPanel} tabIndex={0}>

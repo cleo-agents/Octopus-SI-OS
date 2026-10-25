@@ -24,7 +24,6 @@ const markPresentations: Record<string, ActivityPresentation> = {
   "coder.build.ok": { label: "Build passed", category: "Code", glyph: "code", description: "The project build verifier passed." },
   "context.recipe.valid": { label: "Context recipe valid", category: "Context", glyph: "layers", description: "The context a run reads was assembled and verified against its recipe." },
   "email.authorization.requested": { label: "Email authorization requested", category: "Access", glyph: "lock", description: "A run asked for permission to use email." },
-  "hook.gate.passed": { label: "Hook gate passed", category: "Checks", glyph: "check", description: "A configured hook let the step continue." },
   "lifecycle.decision.allowed": { label: "Lifecycle decision allowed", category: "Checks", glyph: "check", description: "A lifecycle check allowed the next step." },
   "ocr.text.contains": { label: "OCR text matched", category: "Computer Use", glyph: "desktop", description: "Expected text was recognized on the screen." },
 };

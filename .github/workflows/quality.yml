@@ -1,6 +1,8 @@
 name: quality
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     paths-ignore:
       - "docs/**"
@@ -63,6 +65,7 @@ jobs:
           node scripts/test-message-tooltip.cjs
           node scripts/test-chat-thread-header.cjs
           node scripts/test-client-agents.cjs
+          node scripts/test-project-policy.cjs
           node scripts/test-subagent-activity.cjs
           node scripts/test-task-summary.cjs
           node scripts/test-electron-main.cjs

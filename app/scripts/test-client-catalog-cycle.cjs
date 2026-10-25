@@ -60,7 +60,7 @@ function Host() {
     activeRunSteeringPending: false, queuedTurns: [], applicationMutationPending: "", clientAgentSelectionReady: true,
     providerSelectionReady: current.providerInterfacesLoaded, activeProvider: current.providerInterfaces.find((item) => item.id === provider.id),
     providerModel: "model", resolvedProviderInterfaceId: provider.id, reasoningEffort: "low", serviceTier: "priority", executionContextReady: true,
-    selectedClientAgentCapabilityFailure: "", newTaskAuthoringError: "", text: "next", attachments: [], draftMessageId: "", queueOwner: { id: "test" } };
+    selectedClientAgentCapabilityFailure: "", newTaskAuthoringError: "", workspaceSelectionError: "", text: "next", attachments: [], draftMessageId: "", queueOwner: { id: "test" } };
   latestGate = gate(gateInput);
   traces.push(latestGate); return null;
 }

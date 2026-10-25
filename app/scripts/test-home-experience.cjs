@@ -255,6 +255,15 @@ test("call controls show provider captions, selectable transcript history, and a
     assert.equal(view.container.querySelector(".home-call__devices"), null);
     await view.render({ ...props, session: { ...props.session, transcript: [{ id: "c", role: "user", text: "One more thing", final: false }] } });
     assert.equal(view.container.querySelector(".home-call__caption").textContent, "You: One more thing");
+    const longReply = `${"A long spoken explanation. ".repeat(30)}Последние слова 🐙`;
+    await view.render({ ...props, session: { ...props.session, transcript: [{ id: "d", role: "assistant", text: longReply, final: false }] } });
+    const caption = view.container.querySelector(".home-call__caption");
+    assert.equal(caption.textContent, `Home: ${longReply}`);
+    const styles = stylesheetCascade(["src/foundation.css", "src/styles.css", "src/shell.css", "src/components/voice/voice.css"]);
+    assert.equal(styles.value(caption, "justify-content"), "flex-end");
+    assert.equal(styles.value(caption, "max-height"), "44px");
+    assert.equal(styles.value(caption, "-webkit-line-clamp"), undefined);
+    assert.equal(styles.value(caption.firstElementChild, "flex-shrink"), "0");
     await view.render({ ...props, session: session("connecting") });
     assert.equal(view.container.querySelector(".home-call__caption"), null);
     assert.equal(button(view.container, "Show call transcript"), undefined);

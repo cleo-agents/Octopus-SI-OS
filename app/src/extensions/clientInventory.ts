@@ -211,6 +211,7 @@ function hostVocabulary(): Record<string, unknown> {
   const deviceFields = (manifestDefs.deviceSource as { allOf?: JsonSchema[] }).allOf?.[1]?.properties ?? {};
   const credentialFields = (manifestDefs.credentialSource as { allOf?: JsonSchema[] }).allOf?.[1]?.properties ?? {};
   return {
+    file_viewer: { operation: "open_file", placement: "right", formats: "text files, including Markdown", path: "absolute path inside the client's admitted Files roots" },
     categories: {
       widget: { targets: ["voice.widget", "voice.window"], placement: "Home" },
       tab: { targets: ["workspace.surface"], placement: "workspace navigation and split panes" },

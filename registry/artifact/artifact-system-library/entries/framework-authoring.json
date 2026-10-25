@@ -2,12 +2,12 @@
   "schema_version": 1,
   "id": "framework-authoring",
   "title": "Extend the current environment and compose runs",
-  "description": "Create or revise runs and extend capabilities through authorized descriptors and owner packages.",
+  "description": "Investigate and adapt runs, interfaces and capabilities using their current owners and evidence.",
   "applicability": "Use when a task needs a new tool, MCP connection, interface, worker environment, run, or a change to its current capabilities.",
   "state": "active",
   "scope": {},
   "content": {
-    "text": "Inspect the installed descriptors and the actual authoring tools before choosing an implementation. Extend an existing owner through its descriptor when possible. New code belongs to an interface or worker-environment package. Prepare and validate exact file effects; preserve accepted work. Publish reusable instructions and capability selections back into an authorized collection after the capability exists."
+    "text": "Find the owner of the behavior you need to change and follow its relevant inputs, outputs and consumers. Read the current contracts and source where they answer an uncertainty. Use existing composition or descriptor capabilities when they fit; extend an owner package when they do not. Verify the effect at the boundary that matters and investigate related state when a result contradicts the plan. Publish the reusable lesson with its demonstrated conditions and any untested part, rather than a transcript or a claim based only on preparation."
   },
   "selection": {
     "context_artifact_bindings": [

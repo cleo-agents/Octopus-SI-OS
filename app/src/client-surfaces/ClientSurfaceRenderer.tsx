@@ -40,6 +40,7 @@ import "./client-surfaces.css";
 import { homeSurfaceLayoutIdentity } from "./homePresentation";
 import { HOME_SURFACE_FORMING, HOME_SURFACE_LEAVING } from "./homeSurfaceMotion";
 import { placeVoiceWidget, type WidgetRect } from "./voiceWidgetPlacement";
+import scrollbarCss from "../design-system/scrollbars.css?raw";
 
 const VOICE_WIDGET_LAYOUT_RESET_EVENT = "octopus:voice-widget-layout-reset";
 
@@ -1433,7 +1434,12 @@ function sandboxThemeCss(): string {
   const textSmall = token("--text-sm", "12px");
   const textExtraSmall = token("--text-xs", "11px");
   const radius = token("--radius-lg", "10px");
-  return `:root{color-scheme:${colorScheme};--color-background-primary:${backgroundPrimary};--color-background-secondary:${backgroundSecondary};--color-text-primary:${textPrimary};--color-text-secondary:${textSecondary};--color-text-tertiary:${textTertiary};--color-border-primary:${border};--color-accent:${accent};--color-danger:${danger};--font-sans:${fontSans};--font-mono:${fontMono};--text-base:${textBase};--text-sm:${textSmall};--text-xs:${textExtraSmall};--border-radius-md:${radius}}*{box-sizing:border-box}html,body{min-height:100%;margin:0;background:transparent;color:var(--color-text-primary);font-family:var(--font-sans);font-size:var(--text-base);-webkit-font-smoothing:antialiased}`;
+  const scrollbarTokens = ["background", "hover-background", "active-background"]
+    .map((state) => {
+      const name = `--color-token-scrollbar-slider-${state}`;
+      return `${name}:${token(name, border)}`;
+    }).join(";");
+  return `:root{color-scheme:${colorScheme};--color-background-primary:${backgroundPrimary};--color-background-secondary:${backgroundSecondary};--color-text-primary:${textPrimary};--color-text-secondary:${textSecondary};--color-text-tertiary:${textTertiary};--color-border-primary:${border};--color-accent:${accent};--color-danger:${danger};--font-sans:${fontSans};--font-mono:${fontMono};--text-base:${textBase};--text-sm:${textSmall};--text-xs:${textExtraSmall};--border-radius-md:${radius};${scrollbarTokens}}*{box-sizing:border-box}html,body{min-height:100%;margin:0;background:transparent;color:var(--color-text-primary);font-family:var(--font-sans);font-size:var(--text-base);-webkit-font-smoothing:antialiased}${scrollbarCss}`;
 }
 
 function dispatchAction(

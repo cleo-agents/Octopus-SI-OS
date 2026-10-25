@@ -751,7 +751,7 @@ pub(crate) fn reconcile_session_context_order(
         } else {
             let admitted = publications.get(&artifact_ref_key(&candidate.source_artifact));
             if (omitted || last_shared.is_some_and(|index| existing_position <= index)) && admitted.is_none() {
-                return Err(mismatch("inserted artifact has no checked admission"));
+                return Err(mismatch(&format!("inserted artifact '{}' has no checked admission", candidate.source_artifact.id)));
             }
             if let Some(admitted) = admitted {
                 if candidate.source_movement_seq.is_some_and(|sequence| !admitted.contains(&sequence)) {

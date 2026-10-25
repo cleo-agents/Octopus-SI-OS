@@ -2172,6 +2172,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     interfaceId: homeChatWorkspace.activeRun?.chatInterfaceId ?? "",
     surfaces: visibleSurfaces.filter((surface) => !isSidebarOnlySurface(surface)),
     openSurface: (surface) => openPrimarySurface(surface, true),
+    openFile: (target) => openFilesTab(target),
     widgets: (action, operationId) => applyHomeWidgetAction({ accessProfile, runId: homeRunId,
       interfaceId: homeChatWorkspace.activeRun?.chatInterfaceId ?? "",
       surfaces: surfaceRegistry.voiceSurfaces, extensions: surfaceRegistry.extensions }, action, operationId),

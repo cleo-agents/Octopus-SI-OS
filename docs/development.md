@@ -174,8 +174,12 @@ initial setup are outside the timed exchange. No user Home or live provider is u
 
 ### CI triggers and local results
 
-`quality` runs on every push and also supports **Run workflow**. A new push
-cancels an older quality run for the same branch or tag. `doomsday` is manual
+`quality` runs when a pull request is opened, updated with new commits,
+reopened, or marked ready for review. It also runs on pushes, except changes
+limited to `docs/` and the root `README.md`, and supports **Run workflow**.
+A newer run cancels an older quality run for the same pull request, branch or
+tag. Pull request jobs use read-only repository permissions; GitHub may require
+maintainer approval before running a fork's contribution. `doomsday` is manual
 only. `release` runs for a pushed `v*` tag and on **Run workflow**; see
 [Releases](#releases). None of them has a schedule or an automatic retry loop.
 

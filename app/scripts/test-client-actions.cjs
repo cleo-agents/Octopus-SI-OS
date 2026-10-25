@@ -98,8 +98,11 @@ async function harness(read, props = {}) {
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const module = { exports: {} }, opens = [], refusals = [], reads = [], results = [];
   const semantics = await import('../electron/clientActionSemantics.mjs');
+  const fileTargetSource = await fs.readFile(path.join(__dirname, '../src/components/files/fileTarget.ts'), 'utf8');
+  const fileTarget = { exports: {} };
+  Function('exports', ts.transpileModule(fileTargetSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(fileTarget.exports);
   let generation = 0;
-  Function('module', 'exports', 'require', compiled)(module, module.exports, id => id === 'react' ? React : id.includes('clientActionSemantics') ? semantics : id === '../projectionClient' ? {
+  Function('module', 'exports', 'require', compiled)(module, module.exports, id => id === 'react' ? React : id.includes('clientActionSemantics') ? semantics : id.endsWith('/fileTarget') ? fileTarget.exports : id === '../projectionClient' ? {
     readProjection: (method, params) => { assert.equal(method, 'projection.client_actions.list'); reads.push(params); return read(params); },
     submitInterfaceArtifact: async request => { results.push(request); if (props.deliver) await props.deliver(request); },
   } : { useProjectionGeneration: () => generation });
@@ -133,6 +136,41 @@ test('widget results resume after lost admission without repeating the saved act
     await view.render(); assert.equal(calls, 1); assert.equal(view.results.at(-1).payload.ok, false);
     assert.match(view.results.at(-1).payload.error, /effect is unconfirmed/);
   } finally { await view.close(); }
+});
+
+test('file controls use admitted roots and retain their result without reopening', { timeout: 10000 }, async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'octopus-open-file-'));
+  const root = await fs.realpath(directory), previous = window.octopusTransport;
+  const files = require('../electron/osFiles.cjs').createOsFileStore({ resolveRoots: async () => [{ id: 'documents', label: 'Documents', root }] });
+  window.octopusTransport = { osFileRoots: files.roots, readOsFile: files.read };
+  t.after(async () => { window.octopusTransport = previous; await fs.rm(root, { recursive: true, force: true }); });
+  await fs.writeFile(path.join(root, 'Trip plan.md'), '# Trip plan\n\nDetails for the trip.');
+  await fs.writeFile(path.join(root, 'binary'), Buffer.from([0, 255]));
+  await fs.symlink('/etc/hosts', path.join(root, 'escape'));
+  const semantics = await import('../electron/clientActionSemantics.mjs');
+  const makeAction = file => ({ schema: 'octopus.client_action', schema_version: 1, action: 'open_file', request_id: 'document', path: file });
+  for (const invalid of ['relative.md', `${root}/../other.md`, 'https://example.org/page', `${root}/a\0b`]) {
+    assert.throws(() => semantics.parseClientAction(makeAction(invalid)), /exact/);
+  }
+  for (const [file, allowed] of [[path.join(root, 'Trip plan.md'), true], ['/etc/hosts', false], [path.join(root, 'missing.md'), false], [path.join(root, 'binary'), false], [path.join(root, 'escape'), false]]) {
+    window.localStorage.clear(); let finish, opens = 0, fail = allowed;
+    const delivered = new Promise(resolve => { finish = resolve; });
+    const row = identity(2, { action: makeAction(file), tool_call: { id: 'tool.call:' + 'a'.repeat(64), content: Array(32).fill(10) }, expires_at_ms: Date.now() + 5000 });
+    const view = await harness(params => response(params, params.after_seq < 2 ? [row] : []), {
+      openFile: target => { opens++; assert.deepEqual(target, { kind: 'file', rootId: 'documents', path: 'Trip plan.md' }); },
+      deliver: async () => { finish(); if (fail) throw Error('delivery unavailable'); },
+    });
+    try {
+      await React.act(async () => { await delivered; });
+      assert.equal(view.results[0].payload.ok, allowed);
+      assert.equal(opens, allowed ? 1 : 0);
+      if (allowed) {
+        assert.equal(view.results[0].payload.opened.path, file);
+        fail = false; await view.render({}, true);
+        assert.equal(opens, 1); assert.deepEqual(view.results[0], view.results[1]);
+      }
+    } finally { await view.close(); }
+  }
 });
 
 test('a tool-correlated client control returns during the open turn, once, and expired or stopped requests have no effect', async () => {

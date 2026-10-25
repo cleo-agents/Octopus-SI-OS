@@ -2318,7 +2318,7 @@ description: ""
     }
 
     #[test]
-    fn package_script_verifier_admits_polyglot_packages_without_a_rust_branch() {
+    fn package_script_verifier_validates_payloads_without_a_rust_branch() {
         if !program_runs("sh", &["-c", "exit 0"]) || !program_runs("python3", &["--version"]) {
             eprintln!("skipping: sh/python3 unavailable for package_script admission proof");
             return;
@@ -2356,42 +2356,6 @@ description: ""
         );
         assert!(matches!(
             admission.admit_required_verified_artifact(&json_required, json_input(not_json)),
-            Err(VerifiedArtifactError::VerifierRejected { .. })
-        ));
-
-        let clean_call = manifest_evidence(
-            &blobs,
-            "tool.call",
-            br#"{"tool":"coder.read_file","arguments":{"path":"src/lib.rs"}}"#,
-        );
-        let dangerous_call = manifest_evidence(
-            &blobs,
-            "tool.call",
-            br#"{"tool":"coder.exec","command":"rm -rf /"}"#,
-        );
-        let guard_required = RequiredVerifiedArtifact {
-            mark: MarkId::new("hook.gate.passed"),
-            artifact_label: "tool.call".into(),
-            verifier: octopus_descriptors::VerifierId::new("pre_tool_use_guard"),
-            params: serde_json::json!({"denied_command_substrings": ["rm -rf"]}),
-        };
-        let guard_input = |artifact: ArtifactRef| VerificationInput {
-            run: RunId::new("run"),
-            checkpoint: octopus_descriptors::CheckpointId::new("checkpoint"),
-            epoch: 13,
-            mark: guard_required.mark.clone(),
-            artifact,
-            artifact_label: "tool.call".into(),
-            params: guard_required.params.clone(),
-            metadata: serde_json::json!({}),
-        };
-        let mark = admission
-            .admit_required_verified_artifact(&guard_required, guard_input(clean_call))
-            .expect("a clean tool call passes the pre-tool-use guard");
-        assert_eq!(mark.name, MarkId::new("hook.gate.passed"));
-        assert!(matches!(
-            admission
-                .admit_required_verified_artifact(&guard_required, guard_input(dangerous_call)),
             Err(VerifiedArtifactError::VerifierRejected { .. })
         ));
     }

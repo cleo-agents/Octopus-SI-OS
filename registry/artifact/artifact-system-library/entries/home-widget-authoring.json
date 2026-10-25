@@ -2,12 +2,12 @@
   "schema_version": 1,
   "id": "home-widget-authoring",
   "title": "Create and update Home widgets",
-  "description": "Author native or sandbox Home documents and deliver them through a permitted presentation route.",
+  "description": "Create or revise client views from their current presentation and data contracts.",
   "applicability": "Use when asked to display a card, widget, custom view or controls in Home. An ordinary Task may need to return the document through its declared route to Home.",
   "state": "active",
   "scope": {},
   "content": {
-    "text": "Attach and read the widget authoring reference through the declared selection. Discover the actual client tool and presentation address from your own grant and bound delivery context. A published document is separate from an installed extension."
+    "text": "Choose a document, widget update or Extension from the requested experience and current client capabilities. Read the bound widget guide and the relevant live contract. Follow the data producer and presentation route when the view needs system data. Preserve existing design and state, and verify the saved or observed result that matters. Keep unobserved behavior explicit when publishing a reusable procedure."
   },
   "selection": {
     "context_artifact_bindings": [

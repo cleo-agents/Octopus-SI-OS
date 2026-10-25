@@ -358,7 +358,29 @@ pub fn plan_authored_run_composition(
             return Err("authored seed has no active checkpoint on the target run".into());
         }
     }
-    let validation = validate_registry_candidate(&validation_roots(roots), &authored.writes)?;
+    let records = authored.writes.iter()
+        .filter(|write| write.path.parent() == Some(roots.run_records_root.as_path()))
+        .map(|write| RunRecord::from_bytes(write.content.as_bytes()).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let validation = octopus_app_server::validate_registry_candidate_with_inspector(
+        &validation_roots(roots), &authored.writes, |index, view| {
+            if index != authored.writes.len() { return Ok(()); }
+            for record in &records {
+                let interfaces = record.checkpoints.iter()
+                    .filter(|checkpoint| record.active_checkpoints.contains(&checkpoint.id))
+                    .filter_map(|checkpoint| checkpoint.inbound_interface())
+                    .collect::<BTreeSet<_>>();
+                for interface in interfaces {
+                    let descriptor = load_interface_descriptor(&view.roots.registry_root.join("interface"), interface.as_str())?;
+                    let Some(profile) = descriptor.interface_driver_config.as_ref()
+                        .and_then(|config| config.private_config.get("run_authoring_profile")) else { continue; };
+                    let profile = serde_json::from_value(profile.clone()).map_err(|error| format!("provider '{interface}' authoring profile is invalid: {error}"))?;
+                    octopus_run_authoring::declared_provider_run_writer(record, interface, &profile)?;
+                }
+            }
+            Ok(())
+        },
+    )?;
     Ok(AuthoredRunCompositionPlan {
         authored,
         run,

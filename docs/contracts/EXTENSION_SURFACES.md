@@ -318,6 +318,14 @@ every reachable worker pin before any dependency or activation is published.
 A future route cannot enter the live topology with an unbound mandatory role and
 thereby invalidate the run's existing input or control checkpoints.
 
+Authored run previews and publication plans also validate the complete candidate
+against each bound provider's declared authoring profile. They use the provider
+owner's topology validator, including its frontier and future checkpoint
+templates, before publishing any files. The model receives the validation
+verdict, regressions and remaining issues without repeated registry snapshots.
+This checks declarations and formation; it does not establish that a trigger
+has fired or a result reached its consumer.
+
 Intermediate provider observations are handed to their client route as soon as
 they are complete. Their delivery does not close the source. The provider keeps
 source completion on its final output or suspended external call, so reporting
@@ -358,6 +366,10 @@ A signed-in CLI provider owns its authentication and declares the executable
 and account paths its life may use. The bridge supplies its interface-private
 temporary directory to the CLI explicitly; the client does not copy tokens or
 choose a replacement provider.
+
+A replayed intermediate output does not establish that earlier context has been
+restored. Snapshot recovery proves inserted history entries through the checked
+source and output publications, preserving their content and order.
 
 A retained output whose original edges are still pending remains the same
 hand-in. The provider captures its artifact once and waits within its declared
@@ -515,6 +527,14 @@ Pack's `workspace_setup.triggers` names templates that setup arms through the
 same clone, each with its own interface id and quiet period, only when its
 package was selected; a retried setup finds the armed trigger and creates
 nothing.
+
+Home uses compact widgets as its ordinary visual presentation, including during
+voice calls. Longer results may span several focused widgets; long text belongs
+in a saved document. The correlated `open_file` client control reads a text file
+through the existing admitted Files roots and requests its tab in the right
+pane. Its result identifies the readable target and opening request, not rendered
+pixels. Missing, unreadable, binary and oversized files fail explicitly. It
+executes no file and starts no external application.
 
 Home binds a compact client-delivery artifact separately from its full authoring
 coordinates. The compact delivery contract is included in the provider's
