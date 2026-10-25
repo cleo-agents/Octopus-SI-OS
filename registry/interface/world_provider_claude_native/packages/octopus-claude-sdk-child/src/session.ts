@@ -14,6 +14,7 @@ function claudeEnvironment(): Record<string, string> {
     const value = process.env[name];
     if (value !== undefined) env[name] = value;
   }
+  if (env.TMPDIR !== undefined) env.CLAUDE_CODE_TMPDIR = env.TMPDIR;
   return env;
 }
 

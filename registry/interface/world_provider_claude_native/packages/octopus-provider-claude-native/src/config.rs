@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use octopus_interfaces::InterfaceDescriptor;
@@ -5,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub const SDK_CHILD_PROTOCOL: &str = "octopus.claude_sdk_child/1";
-const OWNER_PREFIX: &str = "owner://";
+const IMPORT_PREFIX: &str = "interface://";
 const SDK_CHILD_RECEIPT: &str = "build-receipt.json";
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -19,10 +20,34 @@ pub struct SdkChildConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct InputMessage {
+    pub text_fields: Vec<String>,
+    pub client_context_field: String,
+    pub attachments_field: String,
+    pub identity_field: String,
+    pub identity_required: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClaudeNativeConfig {
     pub model: String,
     pub reasoning_effort: String,
     pub sdk_child: SdkChildConfig,
+    pub input_messages: BTreeMap<String, InputMessage>,
+    pub client_metadata: Value,
+    pub model_catalog: Vec<Value>,
+    pub run_authoring_profile: Value,
+    pub model_hidden_tools: Vec<String>,
+    pub context_output_labels: Vec<String>,
+    pub client_projection_output_labels: Vec<String>,
+    pub session_snapshot_labels: Vec<String>,
+    #[serde(default)]
+    pub worker_instruction_artifacts: Vec<String>,
+    #[serde(default)]
+    pub instruction_artifacts: Vec<String>,
+    #[serde(default)]
+    pub collection_catalogue_instruction_artifacts: Vec<String>,
 }
 
 impl ClaudeNativeConfig {
@@ -46,7 +71,17 @@ impl ClaudeNativeConfig {
             ));
         }
         validate_claude_executable(&config.sdk_child.claude_executable)?;
-        owner_relative_path(&config.sdk_child.executable)?;
+        if config.input_messages.is_empty() {
+            return Err("private_config.input_messages declares no input".into());
+        }
+        for (label, input) in &config.input_messages {
+            validate_identity(label, "input_messages label")?;
+            if input.text_fields.is_empty() {
+                return Err(format!("input_messages '{label}' declares no text_fields"));
+            }
+        }
+        import_relative_path(&config.sdk_child.executable)?;
+        config.instruction_selection()?;
         let declared = declared_models(descriptor)?;
         if !declared.iter().any(|model| model == &config.model) {
             return Err(format!(
@@ -57,8 +92,27 @@ impl ClaudeNativeConfig {
         Ok(config)
     }
 
-    pub fn sdk_child_executable(&self, interface_dir: &Path) -> Result<PathBuf, String> {
-        Ok(interface_dir.join(owner_relative_path(&self.sdk_child.executable)?))
+    pub fn sdk_child_executable(&self, registry_interface_root: &Path) -> Result<PathBuf, String> {
+        Ok(registry_interface_root.join(import_relative_path(&self.sdk_child.executable)?))
+    }
+
+    pub fn instruction_selection(&self) -> Result<Vec<String>, String> {
+        let mut selected = Vec::new();
+        for (key, ids) in [
+            ("worker_instruction_artifacts", &self.worker_instruction_artifacts),
+            ("instruction_artifacts", &self.instruction_artifacts),
+        ] {
+            let mut local = std::collections::BTreeSet::new();
+            for id in ids {
+                if id.trim().is_empty() || id.trim() != id || !local.insert(id.as_str()) {
+                    return Err(format!("private_config.{key} requires unique nonempty artifact ids"));
+                }
+                if !selected.contains(id) {
+                    selected.push(id.clone());
+                }
+            }
+        }
+        Ok(selected)
     }
 }
 
@@ -79,19 +133,21 @@ fn declared_models(descriptor: &InterfaceDescriptor) -> Result<Vec<String>, Stri
         .collect()
 }
 
-fn owner_relative_path(declared: &str) -> Result<PathBuf, String> {
+fn import_relative_path(declared: &str) -> Result<PathBuf, String> {
     let relative = declared
-        .strip_prefix(OWNER_PREFIX)
-        .ok_or_else(|| format!("sdk_child.executable '{declared}' must be an {OWNER_PREFIX} path"))?;
+        .strip_prefix(IMPORT_PREFIX)
+        .ok_or_else(|| format!("sdk_child.executable '{declared}' must be an {IMPORT_PREFIX} import"))?;
     let path = Path::new(relative);
-    if relative.is_empty()
-        || !path.starts_with("packages")
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
+    let mut components = path.components();
+    let owner = components.next();
+    let packages = components.next();
+    if !matches!(owner, Some(Component::Normal(_)))
+        || packages != Some(Component::Normal("packages".as_ref()))
+        || path.components().any(|component| !matches!(component, Component::Normal(_)))
+        || path.components().count() < 3
     {
         return Err(format!(
-            "sdk_child.executable '{declared}' must name a normal path under packages/"
+            "sdk_child.executable '{declared}' must name a normal path under <owner>/packages/"
         ));
     }
     Ok(path.to_path_buf())

@@ -1,8 +1,12 @@
 mod child;
 mod config;
+mod context;
+mod journal;
+mod life;
 
 pub use child::{ChildError, Event, Item, ItemKind, ReadyInfo, SdkChild, SessionConfig, TextInput, ToolSpec, TurnStatus, Usage};
-pub use config::{ClaudeNativeConfig, SDK_CHILD_PROTOCOL, verify_sdk_child};
+pub use config::{ClaudeNativeConfig, InputMessage, SDK_CHILD_PROTOCOL, verify_sdk_child};
+pub use life::interface_life;
 
 use octopus_descriptors::InterfaceId;
 
@@ -21,5 +25,6 @@ pub fn doctor() -> Result<(), String> {
             )
         })?;
     let config = ClaudeNativeConfig::from_descriptor(&descriptor)?;
-    verify_sdk_child(&config.sdk_child_executable(&interface_dir)?)
+    let registry_interface_root = interface_dir.parent().ok_or("OCTOPUS_INTERFACE_DIR has no registry interface root")?;
+    verify_sdk_child(&config.sdk_child_executable(registry_interface_root)?)
 }

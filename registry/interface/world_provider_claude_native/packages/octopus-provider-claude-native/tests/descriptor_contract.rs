@@ -23,7 +23,9 @@ fn the_declared_descriptor_is_accepted_and_drift_fails_closed() {
         ("/interface_driver_config/private_config/model", json!("claude-unknown"), "outside interface_policy"),
         ("/interface_driver_config/private_config/reasoning_effort", json!("ultra"), "reasoning_effort"),
         ("/interface_driver_config/private_config/sdk_child/protocol", json!("octopus.claude_sdk_child/2"), "protocol"),
-        ("/interface_driver_config/private_config/sdk_child/executable", json!("owner://packages/../../escape"), "normal path"),
+        ("/interface_driver_config/private_config/sdk_child/executable", json!("interface://world_provider_claude_native/packages/../../escape"), "normal path"),
+        ("/interface_driver_config/private_config/sdk_child/executable", json!("owner://packages/octopus-claude-sdk-child/bin/child"), "interface:// import"),
+        ("/interface_driver_config/private_config/instruction_artifacts", json!(["a", "a"]), "unique"),
         ("/interface_driver_config/private_config/sdk_child/claude_executable", json!("bin/claude"), "bare command"),
     ] {
         let mut drifted = descriptor.clone();

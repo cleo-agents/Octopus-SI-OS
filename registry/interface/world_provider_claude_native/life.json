@@ -22,6 +22,7 @@
       ],
       "coordinate_root_slots": [
         "run_records_root",
+        "app_server_control_root",
         "registry_interface_root"
       ],
       "inherit_env": [
@@ -88,7 +89,7 @@
           }
         ],
         "allow_network": true,
-        "allow_local_ipc": false
+        "allow_local_ipc": true
       }
     }
   ]
