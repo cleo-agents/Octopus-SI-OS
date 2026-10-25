@@ -228,7 +228,7 @@ fn hash_file(file: &mut File) -> Result<String, String> {
         hasher.update(&buffer[..read]);
     }
     file.seek(SeekFrom::End(0)).map_err(|error| error.to_string())?;
-    Ok(hasher.finalize().to_hex().to_string())
+    Ok(blake3::Hasher::finalize(&hasher).to_hex().to_string())
 }
 
 fn valid_blake3(value: &str) -> Result<(), String> {
