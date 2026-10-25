@@ -21,6 +21,9 @@ octopus-claude-sdk-child --doctor --claude-executable <command-or-absolute-path>
   `item` frames, a `tool_call` for each call to a granted tool, a `usage` once Claude
   Code finishes it, and ends with exactly one `turn_end`.
   One turn runs per session at a time.
+- A `tool_call` keeps Claude's tool call open until the provider answers it
+  with `tool_result` for the same `call_id`; the result text is what the model
+  reads. Interrupting or closing answers every open call as an error.
 - `interrupt` stops the running turn, which ends with `turn_end` status
   `interrupted`. `close` ends the session. A session that failed stays open
   until it is closed and rejects new turns.
@@ -37,7 +40,8 @@ grants that command and read access to `~/Library/Keychains`, as
 `world_provider_claude_cli` does.
 
 A session starts with every built-in Claude Code tool removed, no filesystem
-settings, no MCP server but its own, no plugins, no hooks, and verbatim prompts,
+settings, no MCP server but its own in-process `octopus` server carrying the
+tools named in `start`, no plugins, no hooks, and verbatim prompts,
 so prompt text is never expanded as a file mention or run as a slash command.
 Claude Code is given an explicit environment, not the child's. When Claude Code
 reports its startup capabilities, any tool, MCP server or plugin the session did

@@ -1,9 +1,9 @@
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Event, SessionConfig } from "./protocol.ts";
 import { ChildFailure } from "./claude.ts";
+import { OctopusToolServer, TOOL_SERVER, type ToolCallRequest } from "./tools.ts";
 
 export const CLIENT_APP = "octopus-claude-native/0.1.0";
-const TOOL_SERVER = "octopus";
 const FORWARDED_ENV = ["HOME", "PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 
 const BUILTIN_PLUGINS = ["cc-plugin-agents-md@builtin", "cc-plugin-telemetry@builtin", "cc-plugin-plugin-authoring@builtin"];
@@ -69,6 +69,7 @@ export class Session {
   private readonly input = new UserMessageQueue();
   private readonly query: Query;
   private readonly grantedTools: Set<string>;
+  private readonly tools: OctopusToolServer | null;
   private active: ActiveTurn | null = null;
   private claudeSessionId: string | null;
   private closed = false;
@@ -81,10 +82,8 @@ export class Session {
     claudeExecutable: string,
     private readonly emit: Emit,
   ) {
-    if (config.tools.length > 0) {
-      throw new ChildFailure("tools_not_supported", "this child build exposes no Octopus tools yet");
-    }
-    this.grantedTools = new Set(config.tools.map((tool) => `mcp__${TOOL_SERVER}__${tool.name}`));
+    this.tools = config.tools.length > 0 ? new OctopusToolServer(config.tools, (call) => this.onToolCall(call)) : null;
+    this.grantedTools = new Set(this.tools?.grantedNames ?? []);
     this.claudeSessionId = config.resume;
     this.query = query({
       prompt: this.input,
@@ -99,7 +98,7 @@ export class Session {
         ...(config.resume ? { resume: config.resume } : {}),
         tools: [],
         allowedTools: [...this.grantedTools],
-        mcpServers: {},
+        mcpServers: this.tools ? { [TOOL_SERVER]: this.tools.config } : {},
         strictMcpConfig: true,
         settingSources: [],
         settings: {
@@ -112,10 +111,6 @@ export class Session {
         plugins: [],
         verbatimPrompts: true,
         permissionMode: "dontAsk",
-        canUseTool: async (toolName) =>
-          this.grantedTools.has(toolName)
-            ? { behavior: "allow" }
-            : { behavior: "deny", message: `tool '${toolName}' is not granted to this session`, interrupt: true },
         stderr: (data) => process.stderr.write(data),
       },
     });
@@ -141,12 +136,29 @@ export class Session {
       throw new ChildFailure("turn_not_active", `turn '${turnId}' is not running in session '${this.id}'`);
     }
     this.active.interrupted = true;
+    this.tools?.abandonAll("the turn was interrupted before this tool call returned");
     await this.query.interrupt();
+  }
+
+  resolveTool(callId: string, text: string, isError: boolean): void {
+    if (this.failed) throw this.failed;
+    if (!this.tools) throw new ChildFailure("unknown_tool_call", `session '${this.id}' grants no tools`);
+    this.tools.resolve(callId, text, isError);
+  }
+
+  private onToolCall(call: ToolCallRequest): void {
+    const turn = this.active;
+    if (!turn || turn.interrupted) {
+      this.tools?.resolve(call.callId, "no turn is waiting for this tool call", true);
+      return;
+    }
+    this.emit({ type: "tool_call", session: this.id, turn: turn.id, call_id: call.callId, name: call.name, input: call.input });
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.tools?.abandonAll("the session was closed");
     this.input.end();
     this.query.close();
     await this.finished.catch(() => undefined);
@@ -281,6 +293,7 @@ export class Session {
       fatal: false,
     });
     this.closed = true;
+    this.tools?.abandonAll("the session failed");
     this.input.end();
     this.query.close();
   }

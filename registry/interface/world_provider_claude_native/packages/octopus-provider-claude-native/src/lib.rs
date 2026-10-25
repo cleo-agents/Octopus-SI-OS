@@ -3,6 +3,7 @@ mod config;
 mod context;
 mod journal;
 mod life;
+mod tools;
 
 pub use child::{ChildError, Event, Item, ItemKind, ReadyInfo, SdkChild, SessionConfig, TextInput, ToolSpec, TurnStatus, Usage};
 pub use config::{ClaudeNativeConfig, InputMessage, SDK_CHILD_PROTOCOL, verify_sdk_child};

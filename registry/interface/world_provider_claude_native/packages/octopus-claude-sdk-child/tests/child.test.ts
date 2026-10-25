@@ -63,7 +63,7 @@ test("every command is answered once and a malformed frame ends the child", asyn
     const config = { model: "claude-haiku-4-5", system_prompt: "", cwd: fake.dir, resume: null };
     const { frames, code } = await converse(fake.executable, [
       JSON.stringify({ type: "turn", request_id: 1, session: "s", turn: "t", input: [{ type: "text", text: "hi" }] }),
-      JSON.stringify({ type: "start", request_id: 2, session: "s", config: { ...config, tools: [{ name: "read_file", description: "d", input_schema: {} }] } }),
+      JSON.stringify({ type: "start", request_id: 2, session: "s", config: { ...config, tools: [{ name: "read_file", description: "d", input_schema: { type: "string" } }] } }),
       JSON.stringify({ type: "tool_result", request_id: 3, session: "s", turn: "t", call_id: "c", content: [], is_error: false }),
       JSON.stringify({ type: "close", request_id: 4, session: "s", extra: true }),
       JSON.stringify({ type: "close", request_id: 5, session: "s" }),
@@ -72,7 +72,7 @@ test("every command is answered once and a malformed frame ends the child", asyn
     expect(frames.map((frame) => [frame.type, frame.request_id ?? null, frame.code ?? null, frame.fatal ?? null])).toEqual([
       ["ready", null, null, null],
       ["error", 1, "unknown_session", false],
-      ["error", 2, "tools_not_supported", false],
+      ["error", 2, "invalid_tools", false],
       ["error", 3, "unknown_session", false],
       ["error", null, "invalid_command", true],
     ]);

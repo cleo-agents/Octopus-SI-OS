@@ -19,6 +19,7 @@ use crate::journal::Journal;
 
 const REPLY_LABEL: &str = "interface.artifact.output";
 const TURN_ERROR_LABEL: &str = "turn.error";
+const TOOL_CALL_LABEL: &str = "tool.call";
 const AUTHENTICATION_FAILURE_CODE: &str = "provider.authentication.invalid";
 const CHILD_ENVIRONMENT: [&str; 9] = ["HOME", "PATH", "USER", "LANG", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -36,7 +37,25 @@ struct Provider {
     child_executable: PathBuf,
     claude_cwd: PathBuf,
     child: Option<SdkChild>,
-    open_sessions: BTreeMap<String, String>,
+    open_sessions: BTreeMap<String, OpenSession>,
+    pending_calls: BTreeMap<String, PendingCall>,
+}
+
+struct OpenSession {
+    fingerprint: String,
+    tools: BTreeMap<String, String>,
+}
+
+struct PendingCall {
+    run: String,
+    session: String,
+    turn: String,
+    tool: String,
+}
+
+enum TurnOutcome {
+    Reply(TurnReply),
+    ToolCall { call_id: String, tool: String, arguments: Value, claude_session_id: Option<String> },
 }
 
 struct TurnReply {
@@ -78,6 +97,7 @@ async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
         claude_cwd,
         child: None,
         open_sessions: BTreeMap::new(),
+        pending_calls: BTreeMap::new(),
     };
     ctx.signal_ready().await?;
     loop {
@@ -142,49 +162,166 @@ impl Provider {
                 return self.hand_failure(&handoff, &failure).await;
             }
         }
-        let Some(input) = self.config.input_messages.get(label).cloned() else {
-            let failure = TurnFailure::new("input_not_supported", format!("this provider does not accept '{label}' artifacts"));
-            return self.hand_failure(&handoff, &failure).await;
-        };
-        let resume = self.journal.session(&run).map(|entry| entry.claude_session_id.clone());
-        let history = handoff.current_session_context_artifacts().await;
-        let selection = self.config.instruction_selection()?;
-        let context = match crate::context::assemble(envelope, &pinned, &input, &selection, &history, resume.is_none()) {
-            Ok(context) => context,
-            Err(error) => return self.hand_failure(&handoff, &TurnFailure::new("context_unavailable", error)).await,
-        };
-        let turn = format!("source-{seq}");
-        match self.run_turn(&run, &turn, resume, context).await {
-            Ok(reply) => {
-                if let Some(claude) = &reply.claude_session_id {
-                    self.journal.record_session(&run, claude)?;
-                }
-                self.hand_reply(&handoff, &turn, reply).await
+        if let Some(input) = self.config.input_messages.get(label).cloned() {
+            return self.begin_turn(&handoff, envelope, &pinned, &run, seq, &input).await;
+        }
+        let payload: Value = match envelope
+            .read_artifact_payload()
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                return self.hand_failure(&handoff, &TurnFailure::new("input_unreadable", error)).await;
             }
-            Err(failure) => self.hand_failure(&handoff, &failure).await,
+        };
+        match crate::tools::decode_tool_result(&payload) {
+            Ok(Some(result)) => self.continue_after_result(&handoff, label, result).await,
+            Ok(None) => {
+                let failure = TurnFailure::new("input_not_supported", format!("this provider does not accept '{label}' artifacts"));
+                self.hand_failure(&handoff, &failure).await
+            }
+            Err(error) => self.hand_failure(&handoff, &TurnFailure::new("tool_result_malformed", error)).await,
         }
     }
 
-    async fn run_turn(
+    async fn begin_turn(
         &mut self,
+        handoff: &ProviderOutputHandoff,
+        envelope: &InterfaceInvocationEnvelope,
+        pinned: &[u8],
         run: &str,
+        seq: u64,
+        input: &crate::config::InputMessage,
+    ) -> Result<(), String> {
+        let resume = self.journal.session(run).map(|entry| entry.claude_session_id.clone());
+        let history = handoff.current_session_context_artifacts().await;
+        let selection = self.config.instruction_selection()?;
+        let context = match crate::context::assemble(envelope, pinned, input, &selection, &history, resume.is_none()) {
+            Ok(context) => context,
+            Err(error) => return self.hand_failure(handoff, &TurnFailure::new("context_unavailable", error)).await,
+        };
+        let catalog = match crate::tools::admitted_catalog(handoff, envelope, &self.config.model_hidden_tools) {
+            Ok(catalog) => catalog,
+            Err(error) => return self.hand_failure(handoff, &TurnFailure::new("tool_catalog_invalid", error)).await,
+        };
+        let session = session_name(run);
+        let turn = format!("source-{seq}");
+        let outcome = match self.start_turn(&session, &turn, resume, context, catalog).await {
+            Ok(()) => self.drain(&session, &turn).await,
+            Err(failure) => Err(failure),
+        };
+        self.finish(handoff, run, &session, &turn, outcome).await
+    }
+
+    async fn continue_after_result(
+        &mut self,
+        handoff: &ProviderOutputHandoff,
+        label: &str,
+        result: octopus_tool_handlers::ToolResultArtifact,
+    ) -> Result<(), String> {
+        let Some(call_id) = result.correlation_id.clone() else {
+            return self.hand_failure(handoff, &TurnFailure::new("tool_result_uncorrelated", "the tool result carries no correlation_id")).await;
+        };
+        let Some(pending) = self.pending_calls.remove(&call_id) else {
+            let failure = TurnFailure::new(
+                "tool_result_not_pending",
+                format!("tool result for call '{call_id}' arrived, but this provider holds no open Claude turn for it; the model call was not replayed"),
+            );
+            return self.hand_failure(handoff, &failure).await;
+        };
+        if result.tool != pending.tool || result.label != label {
+            let failure = TurnFailure::new(
+                "tool_result_mismatch",
+                format!("call '{call_id}' was for tool '{}', the result names tool '{}' with label '{}'", pending.tool, result.tool, result.label),
+            );
+            return self.hand_failure(handoff, &failure).await;
+        }
+        let text = crate::tools::model_result_text(&result);
+        let answered = match self.child_mut() {
+            Ok(child) => child
+                .tool_result(&pending.session, &pending.turn, &call_id, vec![TextInput::new(text)], !result.ok)
+                .await
+                .map_err(|error| TurnFailure::new(&error.code, error.message)),
+            Err(failure) => Err(failure),
+        };
+        let outcome = match answered {
+            Ok(()) => self.drain(&pending.session, &pending.turn).await,
+            Err(failure) => Err(failure),
+        };
+        self.finish(handoff, &pending.run, &pending.session, &pending.turn, outcome).await
+    }
+
+    async fn finish(
+        &mut self,
+        handoff: &ProviderOutputHandoff,
+        run: &str,
+        session: &str,
+        turn: &str,
+        outcome: Result<TurnOutcome, TurnFailure>,
+    ) -> Result<(), String> {
+        match outcome {
+            Ok(TurnOutcome::Reply(reply)) => {
+                if let Some(claude) = &reply.claude_session_id {
+                    self.journal.record_session(run, claude)?;
+                }
+                self.hand_reply(handoff, turn, reply).await
+            }
+            Ok(TurnOutcome::ToolCall { call_id, tool, arguments, claude_session_id }) => {
+                if let Some(claude) = &claude_session_id {
+                    self.journal.record_session(run, claude)?;
+                }
+                match self.hand_tool_call(handoff, &tool, &arguments, &call_id).await {
+                    Ok(true) => {
+                        self.pending_calls.insert(
+                            call_id,
+                            PendingCall { run: run.to_string(), session: session.to_string(), turn: turn.to_string(), tool },
+                        );
+                        Ok(())
+                    }
+                    Ok(false) => {
+                        let _ = self.answer_refused_call(session, turn, &call_id).await;
+                        Ok(())
+                    }
+                    Err(error) => {
+                        let _ = self.answer_refused_call(session, turn, &call_id).await;
+                        Err(error)
+                    }
+                }
+            }
+            Err(failure) => self.hand_failure(handoff, &failure).await,
+        }
+    }
+
+    async fn answer_refused_call(&mut self, session: &str, turn: &str, call_id: &str) -> Result<(), TurnFailure> {
+        let child = self.child_mut()?;
+        child
+            .tool_result(session, turn, call_id, vec![TextInput::new("Octopus did not admit this tool call.")], true)
+            .await
+            .map_err(|error| TurnFailure::new(&error.code, error.message))?;
+        child.interrupt(session, turn).await.map_err(|error| TurnFailure::new(&error.code, error.message))
+    }
+
+    async fn start_turn(
+        &mut self,
+        session: &str,
         turn: &str,
         resume: Option<String>,
         context: crate::context::TurnContext,
-    ) -> Result<TurnReply, TurnFailure> {
-        let session = session_name(run);
+        catalog: crate::tools::ToolCatalog,
+    ) -> Result<(), TurnFailure> {
         self.ensure_child().await?;
-        let fingerprint = context.system_fingerprint();
-        let resume = match self.open_sessions.get(&session) {
-            Some(open) if *open == fingerprint => None,
+        let fingerprint = format!("{}:{}", context.system_fingerprint(), blake3::hash(catalog.fingerprint_material().as_bytes()).to_hex());
+        let resume = match self.open_sessions.get(session) {
+            Some(open) if open.fingerprint == fingerprint => None,
             Some(_) => {
-                let _ = self.child_mut()?.close(&session).await;
-                self.open_sessions.remove(&session);
+                let _ = self.child_mut()?.close(session).await;
+                self.open_sessions.remove(session);
                 resume
             }
             None => resume,
         };
-        if !self.open_sessions.contains_key(&session) {
+        if !self.open_sessions.contains_key(session) {
             let config = SessionConfig {
                 model: self.config.model.clone(),
                 system_prompt: context.system_prompt.clone(),
@@ -192,16 +329,18 @@ impl Provider {
                 effort: Some(self.config.reasoning_effort.clone()),
                 resume,
                 max_turns: None,
-                tools: Vec::new(),
+                tools: catalog.specs.clone(),
             };
-            self.child_mut()?.start(&session, config).await.map_err(|error| self.child_failed(error))?;
-            self.open_sessions.insert(session.clone(), fingerprint);
+            self.child_mut()?.start(session, config).await.map_err(|error| self.child_failed(error))?;
+            self.open_sessions.insert(session.to_string(), OpenSession { fingerprint, tools: catalog.tools_by_model_name });
         }
-        let child = self.child_mut()?;
-        child
-            .turn(&session, turn, vec![TextInput::new(context.prompt)])
+        self.child_mut()?
+            .turn(session, turn, vec![TextInput::new(context.prompt)])
             .await
-            .map_err(|error| TurnFailure::new(&error.code, error.message))?;
+            .map_err(|error| TurnFailure::new(&error.code, error.message))
+    }
+
+    async fn drain(&mut self, session: &str, turn: &str) -> Result<TurnOutcome, TurnFailure> {
         let mut text = Vec::new();
         let mut usage = None;
         let mut failure: Option<TurnFailure> = None;
@@ -212,7 +351,7 @@ impl Provider {
                 Ok(Some(event)) => event,
                 Ok(None) => return Err(self.child_lost("the SDK child closed its event stream")),
                 Err(_) => {
-                    let _ = self.child_mut()?.interrupt(&session, turn).await;
+                    let _ = self.child_mut()?.interrupt(session, turn).await;
                     return Err(TurnFailure::new("turn_timeout", "the Claude turn exceeded its time limit and was interrupted"));
                 }
             };
@@ -223,10 +362,19 @@ impl Provider {
                         text.push(item.text);
                     }
                 }
+                Event::ToolCall { session: name, turn: t, call_id, name: model_name, input } if name == session && t == turn => {
+                    let tool = self.open_sessions.get(session).and_then(|open| open.tools.get(&model_name)).cloned();
+                    let Some(tool) = tool else {
+                        let _ = self.child_mut()?.interrupt(session, turn).await;
+                        return Err(TurnFailure::new("tool_not_admitted", format!("Claude called '{model_name}', which is not in this session's admitted catalog")));
+                    };
+                    return Ok(TurnOutcome::ToolCall { call_id, tool, arguments: Value::Object(input), claude_session_id });
+                }
                 Event::Usage { session: name, turn: t, usage: observed, .. } if name == session && t == turn => usage = Some(observed),
                 Event::Error { fatal: true, code, message, .. } => {
                     self.child = None;
                     self.open_sessions.clear();
+                    self.pending_calls.clear();
                     return Err(TurnFailure::new(&code, message));
                 }
                 Event::Error { session: Some(name), code, message, .. } if name == session => {
@@ -238,16 +386,16 @@ impl Provider {
                     }
                     return match status {
                         TurnStatus::Completed => {
-                            let text = if text.is_empty() { result.unwrap_or_default() } else { text.join("\n\n") };
+                            let text = result.filter(|result| !result.trim().is_empty()).unwrap_or_else(|| text.join("\n\n"));
                             if text.trim().is_empty() {
                                 Err(TurnFailure::new("empty_reply", "Claude Code completed the turn without text"))
                             } else {
-                                Ok(TurnReply { text, claude_session_id, usage })
+                                Ok(TurnOutcome::Reply(TurnReply { text, claude_session_id, usage }))
                             }
                         }
                         TurnStatus::Interrupted => Err(TurnFailure::new("turn_interrupted", "the Claude turn was interrupted")),
                         TurnStatus::Failed => {
-                            self.open_sessions.remove(&session);
+                            self.open_sessions.remove(session);
                             Err(failure.unwrap_or_else(|| TurnFailure::new("claude_turn_failed", "the Claude turn failed")))
                         }
                     };
@@ -286,6 +434,7 @@ impl Provider {
         if matches!(error.code.as_str(), "child_exited" | "child_write_failed" | "child_failed" | "child_protocol_violation") {
             self.child = None;
             self.open_sessions.clear();
+            self.pending_calls.clear();
         }
         TurnFailure::new(&error.code, error.message)
     }
@@ -293,6 +442,7 @@ impl Provider {
     fn child_lost(&mut self, message: &str) -> TurnFailure {
         self.child = None;
         self.open_sessions.clear();
+        self.pending_calls.clear();
         TurnFailure::new("child_exited", message)
     }
 
@@ -314,6 +464,16 @@ impl Provider {
             });
         }
         self.hand_terminal(handoff, REPLY_LABEL, &value).await
+    }
+
+    async fn hand_tool_call(&self, handoff: &ProviderOutputHandoff, tool: &str, arguments: &Value, call_id: &str) -> Result<bool, String> {
+        let value = json!({"tool": tool, "arguments": arguments, "correlation_id": call_id});
+        let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+        let artifact = InterfaceArtifactFile::write(self.ctx.var_dir.join("emitted"), TOOL_CALL_LABEL, &bytes).map_err(|error| error.to_string())?;
+        let outcome = handoff
+            .hand_final(ProviderEmission { artifact, route: ProviderEmissionRoute::Tool { tool: tool.to_string() } })
+            .await?;
+        Ok(matches!(outcome, octopus_run_authoring::ProviderHandoffOutcome::Admitted { .. }))
     }
 
     async fn hand_failure(&self, handoff: &ProviderOutputHandoff, failure: &TurnFailure) -> Result<(), String> {

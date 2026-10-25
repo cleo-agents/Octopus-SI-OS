@@ -28,6 +28,7 @@ octopus-world-pyecho-life-runtime = { path = "../../../world_pyecho/packages/oct
 octopus-run-authoring = { path = "../../../system_interface_authoring/packages/octopus-run-authoring" }
 octopus-model-context-render = { path = "../../../world_provider_codex/packages/octopus-model-context-render" }
 octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
 
 [dev-dependencies]
 tempfile = "3"

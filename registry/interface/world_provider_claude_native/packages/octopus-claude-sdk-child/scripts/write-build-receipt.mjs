@@ -13,6 +13,7 @@ const inputs = [
   "src/main.ts",
   "src/protocol.ts",
   "src/session.ts",
+  "src/tools.ts",
 ];
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const files = Object.fromEntries(inputs.map((name) => [name, digest(readFileSync(resolve(root, name)))]));

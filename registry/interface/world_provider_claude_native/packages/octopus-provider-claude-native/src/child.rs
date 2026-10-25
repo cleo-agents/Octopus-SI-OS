@@ -16,7 +16,7 @@ use crate::config::SDK_CHILD_PROTOCOL;
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,

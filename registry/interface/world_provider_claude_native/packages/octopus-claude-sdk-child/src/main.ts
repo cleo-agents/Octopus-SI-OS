@@ -85,8 +85,9 @@ async function serve(claudeExecutable: string): Promise<number> {
         write({ type: "ack", request_id: frame.request_id });
         return;
       case "tool_result":
-        existing(frame.session);
-        throw new ChildFailure("unknown_tool_call", `call '${frame.call_id}' is not pending in session '${frame.session}'`);
+        existing(frame.session).resolveTool(frame.call_id, frame.content.map((part) => part.text).join("\n\n"), frame.is_error);
+        write({ type: "ack", request_id: frame.request_id });
+        return;
       case "close": {
         const session = existing(frame.session);
         sessions.delete(frame.session);

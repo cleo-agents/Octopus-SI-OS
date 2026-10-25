@@ -7626,6 +7626,7 @@ dependencies = [
  "octopus-model-context-render",
  "octopus-run-authoring",
  "octopus-runtime",
+ "octopus-tool-handlers",
  "octopus-world-pyecho-life-runtime",
  "serde",
  "serde_json",
