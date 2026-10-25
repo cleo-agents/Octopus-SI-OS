@@ -10,7 +10,7 @@ const IMPORT_PREFIX: &str = "interface://";
 const SDK_CHILD_RECEIPT: &str = "build-receipt.json";
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SdkChildConfig {
     pub executable: String,

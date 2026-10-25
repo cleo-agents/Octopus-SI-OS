@@ -20,6 +20,16 @@ Claude Code keeps its own sign-in. On macOS a claude.ai sign-in is read from
 the login Keychain, which `life.json` grants through `/usr/bin/security` and
 read access to `~/Library/Keychains`.
 
+## Model and reasoning effort
+
+`private_config.model` and `private_config.reasoning_effort` are what the
+client's model picker rewrites in a Home's private copy of this interface. The
+life reads its descriptor from the registry before every turn, so a change
+applies to the next turn: the Claude session is closed and resumed with the
+new model or effort, keeping the conversation. A changed `sdk_child` is not
+adopted that way; the turn fails with `descriptor_changed` until the life
+restarts and verifies the new child.
+
 ## Inputs, replies and streaming
 
 The life accepts the labels declared in `private_config.input_messages`,

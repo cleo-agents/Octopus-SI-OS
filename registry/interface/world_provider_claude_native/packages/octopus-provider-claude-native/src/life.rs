@@ -148,6 +148,7 @@ impl Provider {
         let seq = own.movement.seq.0;
         let runtime = envelope.runtime().map_err(|error| error.to_string())?;
         let run = runtime.run.as_str().to_string();
+        let refreshed = self.refresh_config();
         let pinned = self.ctx.pinned_run_record_bytes(envelope)?;
         let handoff = self
             .session
@@ -161,6 +162,9 @@ impl Provider {
             None => None,
         };
         let reply_to = reply_to.as_ref();
+        if let Err(failure) = refreshed {
+            return self.hand_failure(&handoff, reply_to, None, &failure).await;
+        }
         match recovery {
             ProviderSourceRecovery::Completed => return Ok(()),
             ProviderSourceRecovery::Process => {}
@@ -200,6 +204,35 @@ impl Provider {
             }
             Err(error) => self.hand_failure(&handoff, None, None, &TurnFailure::new("tool_result_malformed", error)).await,
         }
+    }
+
+    /// Reads the interface's current descriptor from the registry before each
+    /// turn. The client records a Home's model and reasoning effort as
+    /// private configuration of this interface, so a change made between
+    /// turns applies to the next turn here: the session fingerprint then
+    /// differs and the Claude session is resumed with the new values. A
+    /// changed SDK child or Claude executable is not adopted without the
+    /// restart that re-verifies it.
+    fn refresh_config(&mut self) -> Result<(), TurnFailure> {
+        let registry_root = self
+            .ctx
+            .interface_dir
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or_else(|| TurnFailure::new("descriptor_unavailable", "the interface directory has no registry root"))?;
+        let descriptor = octopus_interface_transport::resolve_interface_descriptor(registry_root, &self.ctx.interface)
+            .map_err(|error| TurnFailure::new("descriptor_unavailable", error))?
+            .ok_or_else(|| TurnFailure::new("descriptor_unavailable", "the interface descriptor is no longer in the registry"))?;
+        let config = ClaudeNativeConfig::from_descriptor(&descriptor).map_err(|error| TurnFailure::new("descriptor_invalid", error))?;
+        if config.sdk_child != self.config.sdk_child {
+            return Err(TurnFailure::new(
+                "descriptor_changed",
+                "the SDK child or Claude executable changed since this life started; the life must restart to verify it",
+            ));
+        }
+        self.config = config;
+        self.descriptor = descriptor;
+        Ok(())
     }
 
     async fn begin_turn(
@@ -337,7 +370,13 @@ impl Provider {
         catalog: crate::tools::ToolCatalog,
     ) -> Result<(), TurnFailure> {
         self.ensure_child().await?;
-        let fingerprint = format!("{}:{}", context.system_fingerprint(), blake3::hash(catalog.fingerprint_material().as_bytes()).to_hex());
+        let fingerprint = format!(
+            "{}:{}:{}:{}",
+            self.config.model,
+            self.config.reasoning_effort,
+            context.system_fingerprint(),
+            blake3::hash(catalog.fingerprint_material().as_bytes()).to_hex()
+        );
         let resume = match self.open_sessions.get(session) {
             Some(open) if open.fingerprint == fingerprint => None,
             Some(_) => {
