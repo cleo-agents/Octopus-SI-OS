@@ -493,6 +493,34 @@ async function run() {
     }
 
     runCrashChild("rollback-install", root);
+    assert.notDeepEqual(await transactionEntries(roots), [], "the crashed install left a transaction to recover");
+    const projectionOptions = {
+      resolveRepoRoot: () => path.resolve(__dirname, "../.."),
+      sourceRegistry: () => roots.sourceRegistryRoot,
+      localPackageRegistry: () => roots.sourceRegistryRoot,
+      localPackageLibrary: () => roots.libraryRoot,
+      octopusHome: () => roots.octopusHomeRoot,
+      projectEePolicies: async () => ({ environments: [], issues: [] }),
+    };
+    const localPackagesRead = { contract_version: 1, method: "projection.operator.os.local_packages" };
+    // A catalog read that meets an interrupted transaction recovers it, which needs the native
+    // publication boundary. A projection without one fails closed and leaves the transaction alone.
+    const unpublishedStore = createProjectionStore(projectionOptions);
+    try {
+      await assert.rejects(unpublishedStore.read(localPackagesRead), /native publication boundary/);
+    } finally {
+      unpublishedStore.close();
+    }
+    assert.notDeepEqual(await transactionEntries(roots), [], "a refused recovery keeps the transaction");
+    const publishedStore = createProjectionStore({ ...projectionOptions, localPackagePublication: () => roots.publication });
+    try {
+      const recoveredCatalog = await publishedStore.read(localPackagesRead);
+      assert.equal(packageRecord(recoveredCatalog)?.installed, false);
+      assert.equal(packageRecord(recoveredCatalog)?.receipt_state, "missing");
+    } finally {
+      publishedStore.close();
+    }
+    assert.deepEqual(await transactionEntries(roots), [], "the projection read recovered the transaction");
     catalog = await readLocalPackageCatalog(roots);
     assert.equal(packageRecord(catalog)?.installed, false);
     assert.equal(packageRecord(catalog)?.receipt_state, "missing");
@@ -539,6 +567,7 @@ async function run() {
       }, {
         localPackageRegistryRoot: roots.sourceRegistryRoot,
         localPackageLibraryRoot: roots.libraryRoot,
+        localPackagePublication: roots.publication,
       }),
       /active owners changed before repair/,
     );
@@ -727,6 +756,40 @@ async function run() {
     catalog = await readLocalPackageCatalog(roots);
     assert.equal(packageRecord(catalog)?.installed, false);
     assert.equal(await fs.stat(path.join(roots.sourceRegistryRoot, "interface", "world_test_provider")).then((stat) => stat.isDirectory()), true);
+    assert.deepEqual(await transactionEntries(roots), []);
+
+    // The Applications and Drivers views install through the workspace mutation. Its hooks carry
+    // the native publication boundary; without one the install is refused before any journal exists.
+    const inventoryHooks = { localPackageRegistryRoot: roots.sourceRegistryRoot, localPackageLibraryRoot: roots.libraryRoot };
+    const installRequest = {
+      action: "install_package",
+      operationId: "inventory_install_001",
+      packageIds: ["application.test_provider"],
+      expectedSourceDigests: { "application.test_provider": packageRecord(catalog).source_digest },
+    };
+    await assert.rejects(
+      mutateOctopusOsWorkspace(roots.activeRegistryRoot, roots.octopusHomeRoot, {}, installRequest, inventoryHooks),
+      /native publication boundary/,
+    );
+    assert.deepEqual(await transactionEntries(roots), [], "a refused install writes no transaction");
+    assert.equal(packageRecord(await readLocalPackageCatalog(roots))?.installed, false);
+    const inventoryInstall = await mutateOctopusOsWorkspace(roots.activeRegistryRoot, roots.octopusHomeRoot, {}, installRequest,
+      { ...inventoryHooks, localPackagePublication: roots.publication });
+    assert.equal(inventoryInstall.changed, true);
+    assert.equal(inventoryInstall.action, "install_package");
+    catalog = await readLocalPackageCatalog(roots);
+    assert.equal(packageRecord(catalog)?.installed, true);
+    assert.equal(packageRecord(catalog)?.receipt_state, "valid");
+    assert.deepEqual(await transactionEntries(roots), []);
+    const inventoryRemove = await mutateOctopusOsWorkspace(roots.activeRegistryRoot, roots.octopusHomeRoot, {}, {
+      action: "remove_package",
+      operationId: "inventory_remove_001",
+      packageIds: ["application.test_provider"],
+      expectedInstalledDigests: { "application.test_provider": packageRecord(catalog).installed_digest },
+    }, { ...inventoryHooks, localPackagePublication: roots.publication });
+    assert.equal(inventoryRemove.changed, true);
+    catalog = await readLocalPackageCatalog(roots);
+    assert.equal(packageRecord(catalog)?.installed, false);
     assert.deepEqual(await transactionEntries(roots), []);
   } finally {
     await fs.rm(root, { recursive: true, force: true });

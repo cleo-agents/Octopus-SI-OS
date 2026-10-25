@@ -305,6 +305,7 @@ function packageMemberFileSnapshot(source, state) {
 
 async function installLocalPackages(options) {
   const roots = normalizeRoots(options);
+  packagePublisher(roots);
   return withPackageStateLock(roots.stateRoot, async () => {
     await ensurePackageState(roots);
     await recoverLocalPackageTransactionsUnlocked(roots);
@@ -325,6 +326,7 @@ async function installLocalPackages(options) {
 
 async function removeLocalPackages(options) {
   const roots = normalizeRoots(options);
+  packagePublisher(roots);
   return withPackageStateLock(roots.stateRoot, async () => {
     await ensurePackageState(roots);
     await recoverLocalPackageTransactionsUnlocked(roots);
@@ -348,6 +350,7 @@ async function removeLocalPackages(options) {
 
 async function repairLocalPackages(options) {
   const roots = normalizeRoots(options);
+  packagePublisher(roots);
   return withPackageStateLock(roots.stateRoot, async () => {
     await ensurePackageState(roots);
     await recoverLocalPackageTransactionsUnlocked(roots);
@@ -404,6 +407,7 @@ function compareSnapshotPaths(left, right) {
 
 async function applyLocalApplicationPack(options) {
   const roots = normalizeRoots(options);
+  packagePublisher(roots);
   return withPackageStateLock(roots.stateRoot, async () => {
     await ensurePackageState(roots);
     await recoverLocalPackageTransactionsUnlocked(roots);

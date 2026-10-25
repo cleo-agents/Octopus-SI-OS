@@ -34,6 +34,7 @@ function configurationProjection(store) {
           activeRegistryRoot: path.join(store.octopusHome(), "registry"),
           libraryRoot: store.resolveLocalPackageLibrary(),
           stateRoot: path.join(store.octopusHome(), "client", "package-state"),
+          publication: store.localPackagePublication(),
         }) };
         packageCatalogBuild = build;
       }
