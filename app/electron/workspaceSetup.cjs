@@ -359,11 +359,15 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
   }
   try {
     const topology = await findWorkspaceTopology(roots, true);
+    const switching = await pendingHomeSwitches(roots);
     const expectedRoots = new Set([...receipts.map((receipt) => receipt.root_ee_id), ...receiptedProjectEeIds]);
-    const expectedRuns = new Set([...receipts.map((receipt) => receipt.home_run_id), ...homes.map((home) => home.run_id)]);
+    const expectedRuns = new Set([
+      ...receipts.map((receipt) => receipt.home_run_id),
+      ...[...homes, ...switching].map((home) => home.run_id),
+    ]);
     const expectedInterfaces = new Set([
       ...receipts.map((receipt) => receipt.home_interface_id),
-      ...homes.map((home) => home.interface_id),
+      ...[...homes, ...switching].map((home) => home.interface_id),
     ]);
     const orphanedRoots = topology.operatorSpaceEeIds.filter((eeId) => !expectedRoots.has(eeId));
     const orphanedRuns = topology.homeRunIds.filter((runId) => !expectedRuns.has(runId));
@@ -928,6 +932,18 @@ async function workspaceHomeChain(roots, workspaceReceipt) {
   }
   if (homes.length !== switches.length + 1) {
     throw new Error("A Workspace Home provider switch receipt does not continue the configured Home");
+  }
+  return homes;
+}
+
+async function pendingHomeSwitches(roots) {
+  const homes = [];
+  for (const entry of await workspaceReceiptEntries(roots.transactionsRoot)) {
+    if (!entry.isDirectory() || !SAFE_OPERATION_ID.test(entry.name)) continue;
+    const journal = await readJournal(roots, path.join(roots.transactionsRoot, entry.name));
+    if (journal.schema === "octopus.workspace_project_transaction" && journal.receipt.action === "switch_home_provider") {
+      homes.push({ run_id: journal.receipt.outcome.home_run_id, interface_id: journal.receipt.outcome.home_interface_id });
+    }
   }
   return homes;
 }

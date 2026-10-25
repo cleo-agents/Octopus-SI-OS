@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { OctopusClientAccessProfile, OctopusProviderInterface } from "../../electron";
-import { OcButton, OcDialog, OcDialogFooter, OcDialogHeader, OcMenuItem, OcMenuSurface, OcPopover } from "../../design-system/components";
+import { OcButton, OcDialog, OcDialogFooter, OcDialogHeader, OcMenuItem, OcMenuSurface } from "../../design-system/components";
 import { useHomeProviderSwitch } from "../../shell/useHomeProviderSwitch";
 import { providerDefaultModel } from "./chatWorkspaceCapabilities";
 import "./providerModelPicker.css";
@@ -18,13 +19,24 @@ export function providerName(provider: OctopusProviderInterface): string {
 
 export function HomeProviderSwitch({ accessProfile, providers, disabled }: Props) {
   const home = useHomeProviderSwitch(accessProfile);
-  const [open, setOpen] = useState(false);
+  const [menu, setMenu] = useState<{ right: number; bottom: number } | null>(null);
   const [target, setTarget] = useState<OctopusProviderInterface | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [menu]);
   const choices = providers.filter((provider) => providerDefaultModel(provider));
   const current = choices.find((provider) => provider.id === home.providerInterfaceId);
   if (!home.ready || !current || choices.length < 2) return null;
   const targetModel = target ? providerDefaultModel(target) : null;
+  const openMenu = () => {
+    const box = triggerRef.current?.getBoundingClientRect();
+    if (box) setMenu({ right: window.innerWidth - box.right, bottom: window.innerHeight - box.top + 8 });
+  };
   const confirm = async () => {
     if (!target || !targetModel) return;
     try {
@@ -38,48 +50,49 @@ export function HomeProviderSwitch({ accessProfile, providers, disabled }: Props
   };
   return (
     <>
-      <OcPopover
-        align="end"
-        anchor={(
-          <span className="provider-model-picker">
-            <button
-              aria-expanded={open}
-              aria-haspopup="menu"
-              aria-label={`Home provider: ${providerName(current)}`}
-              className="provider-model-trigger"
-              data-home-provider-switch
-              disabled={disabled || home.pending}
-              onClick={() => setOpen((value) => !value)}
-              type="button"
-            >
-              <span className="provider-model-trigger-label"><span>{providerName(current)}</span></span>
-              <span aria-hidden="true" className="provider-model-trigger-chevron" />
-            </button>
-          </span>
-        )}
-        label="Home provider"
-        onDismiss={() => setOpen(false)}
-        open={open}
-        placement="top"
-        role="menu"
-      >
-        <OcMenuSurface>
-          {choices.map((provider) => (
-            <OcMenuItem
-              description={providerDefaultModel(provider)?.displayName}
-              key={provider.id}
-              label={providerName(provider)}
-              onClick={() => {
-                setOpen(false);
-                if (provider.id !== current.id) setTarget(provider);
-              }}
-              role="menuitemradio"
-              aria-checked={provider.id === current.id}
-              selected={provider.id === current.id}
-            />
-          ))}
-        </OcMenuSurface>
-      </OcPopover>
+      <span className="provider-model-picker">
+        <button
+          aria-expanded={menu !== null}
+          aria-haspopup="menu"
+          aria-label={`Home provider: ${providerName(current)}`}
+          className="provider-model-trigger"
+          data-home-provider-switch
+          disabled={disabled || home.pending}
+          onClick={() => (menu ? setMenu(null) : openMenu())}
+          ref={triggerRef}
+          type="button"
+        >
+          <span className="provider-model-trigger-label"><span>{providerName(current)}</span></span>
+          <span aria-hidden="true" className="provider-model-trigger-chevron" />
+        </button>
+      </span>
+      {menu ? createPortal(
+        <div className="fixed inset-0 z-50" onPointerDown={() => setMenu(null)}>
+          <OcMenuSurface
+            aria-label="Home provider"
+            className="fixed min-w-[220px]"
+            onPointerDown={(event) => event.stopPropagation()}
+            role="menu"
+            style={{ right: menu.right, bottom: menu.bottom }}
+          >
+            {choices.map((provider) => (
+              <OcMenuItem
+                aria-checked={provider.id === current.id}
+                description={provider.id === current.id ? undefined : providerDefaultModel(provider)?.displayName}
+                key={provider.id}
+                label={providerName(provider)}
+                onClick={() => {
+                  setMenu(null);
+                  if (provider.id !== current.id) setTarget(provider);
+                }}
+                role="menuitemradio"
+                selected={provider.id === current.id}
+              />
+            ))}
+          </OcMenuSurface>
+        </div>,
+        document.body,
+      ) : null}
       <OcDialog
         ariaLabelledBy="octopus-home-provider-title"
         busy={home.pending}
