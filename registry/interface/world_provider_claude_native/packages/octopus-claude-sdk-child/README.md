@@ -31,7 +31,10 @@ octopus-claude-sdk-child --doctor --claude-executable <command-or-absolute-path>
 
 Claude Code keeps its own sign-in. The child stores no credential and reads
 none; `--doctor` reports `claude auth status` without the account's email or
-organization.
+organization. On macOS, Claude Code keeps a claude.ai sign-in in the login
+Keychain and reads it with `/usr/bin/security`, so the provider's `life.json`
+grants that command and read access to `~/Library/Keychains`, as
+`world_provider_claude_cli` does.
 
 A session starts with every built-in Claude Code tool removed, no filesystem
 settings, no MCP server but its own, no plugins, no hooks, and verbatim prompts,

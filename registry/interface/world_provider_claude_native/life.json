@@ -57,7 +57,8 @@
           }
         ],
         "executable_commands": [
-          "claude"
+          "claude",
+          "security"
         ],
         "read_env_paths": [],
         "write_env_paths": [],
@@ -70,6 +71,10 @@
           {
             "env": "HOME",
             "relative_path": ".claude.json"
+          },
+          {
+            "env": "HOME",
+            "relative_path": "Library/Keychains"
           }
         ],
         "write_env_subpaths": [
