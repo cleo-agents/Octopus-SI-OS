@@ -451,6 +451,21 @@
         let cli_provider = cli_plan.interface_writes.iter().find(|write| write.tag == format!("interface:{}", cli_plan.model_interface_id)).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&cli_provider.content).unwrap()["copy_of"], "world_provider_claude_cli");
         assert!(cli_plan.run_writes.iter().any(|write| write.tag.starts_with("run:run_memory_observer_")));
+        let excerpt = format!("operator.pinned_excerpt:{}", "a".repeat(64));
+        let mut pinned_request = cli_request.clone();
+        pinned_request.conversation.pinned_artifact_bindings = vec![ArtifactBindingSeed { id: excerpt.clone() }];
+        pinned_request.conversation.pinned_context_items = vec![PinnedContextSeed {
+            artifact_id: excerpt.clone(), source_artifact_id: "operator.message:source".into(),
+            source_message_id: "msg_source".into(), text: "Remember HERON-17.".into(), start: 0, end: 18, role: "user".into(),
+        }];
+        let pinned_plan = plan_operator_chat_topology(&pinned_request).expect("a conversation with a pinned excerpt plans");
+        let pinned_record = RunRecord::from_bytes(pinned_plan.run_record_content.as_bytes()).unwrap();
+        let pinned_binding: BoundRunAuthoringTopology = serde_json::from_value(
+            pinned_record.interface_state[&InterfaceId::new(&pinned_plan.model_interface_id)]["run_authoring_binding"].clone(),
+        ).unwrap();
+        assert!(pinned_binding.checkpoints.iter().filter(|template| template.include_context).all(|template|
+            template.static_artifact_bindings.iter().any(|id| id.as_str() == excerpt)),
+            "a pinned excerpt is fixed context on every checkpoint that carries conversation context");
         assert_exact_writer_detachment(&plan, request.run_records_root.as_ref().unwrap());
         assert_computer_use_planned_identities(&registry_root, ee_dir.path());
         assert_browser_only_persistent_plan(&registry_root, ee_dir.path());
