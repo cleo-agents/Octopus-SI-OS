@@ -2406,7 +2406,12 @@ async function verifyHomeProviderSwitch(temporary) {
   const octopusHomeRoot = path.join(temporary, "switch-home");
   const registryRoot = path.join(octopusHomeRoot, "registry");
   await createFixture(octopusHomeRoot, registryRoot);
-  const planOperatorSurface = (input) => fixturePlan(octopusHomeRoot, registryRoot, input);
+  const handoffs = [];
+  const planOperatorSurface = (input) => {
+    if (input.request.handoff) handoffs.push(input.request.handoff);
+    const { handoff, ...request } = input.request;
+    return fixturePlan(octopusHomeRoot, registryRoot, { ...input, request });
+  };
   const setup = await initializeWorkspace({ octopusHomeRoot, registryRoot, request: setupRequest("switch_setup_12345678"), planOperatorSurface });
   const runPath = path.join(octopusHomeRoot, "state", "runs", `${setup.homeRunId}.json`);
   const run = JSON.parse(await fs.readFile(runPath, "utf8"));
@@ -2422,6 +2427,10 @@ async function verifyHomeProviderSwitch(temporary) {
     providerModel: "fixture-claude",
     reasoningEffort: "medium",
     expectedHomeRunDigest: crypto.createHash("sha256").update(await fs.readFile(runPath)).digest("hex"),
+    handoffMessages: [
+      { artifactId: "operator.message:fixture", messageId: "msg_fixture", role: "user", text: "Remember PELICAN." },
+      { artifactId: "interface.artifact.output:fixture", messageId: "out_fixture", role: "assistant", text: "Remembered." },
+    ],
   };
   await assert.rejects(mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope, planOperatorSurface,
     request: { ...request, operationId: "home_switch_same_1234", providerInterfaceId: "world_provider_codex" } }), /already uses this provider/);
@@ -2431,6 +2440,7 @@ async function verifyHomeProviderSwitch(temporary) {
   assert.equal(switched.changed, true);
   assert.equal(switched.previousHomeRunId, setup.homeRunId);
   assert.notEqual(switched.homeRunId, setup.homeRunId);
+  assert.deepEqual(handoffs.at(-1), { sourceRunId: setup.homeRunId, messages: request.handoffMessages });
   const retired = JSON.parse(await fs.readFile(runPath, "utf8"));
   assert.deepEqual(retired.active_checkpoints, []);
   assert.deepEqual(retired.interface_state[setup.homeInterfaceId].client_archive.active_checkpoints, run.active_checkpoints);

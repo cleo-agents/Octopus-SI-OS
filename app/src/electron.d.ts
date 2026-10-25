@@ -1623,6 +1623,7 @@ export type OctopusOsWorkspaceMutationRequest =
       reasoningEffort: string;
       serviceTier?: string;
       expectedHomeRunDigest: string;
+      handoffMessages?: Array<{ artifactId: string; messageId: string; role: "user" | "assistant"; text: string }>;
     }
   | {
       action: "delete_task";
@@ -1788,6 +1789,7 @@ export type OctopusWorkspaceSetupState = {
     projects: Array<{ key: string; eeId: string }>;
   } | null;
   errors: string[];
+  switching: boolean;
 };
 
 export type OctopusClientSetupPlan = {

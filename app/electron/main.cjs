@@ -3728,6 +3728,7 @@ ipcMain.handle("octopus:workspace-setup-state", async (_event, token) => {
   return {
     status: state.status,
     errors: state.errors,
+    switching: state.switching === true,
     receipt: state.receipt ? {
       operationId: state.receipt.operation_id,
       requestDigest: state.receipt.request_digest,

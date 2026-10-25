@@ -1,4 +1,4 @@
-module.exports = { clientPinnedContextItem, materializePinnedExcerpt, normalizePinnedContextItems, runJsonProcess, updateOperatorChatPins, validatePinnedExcerpt };
+module.exports = { clientPinnedContextItem, materializePinnedExcerpt, normalizePinnedContextItems, resolveConversationHandoff, runJsonProcess, updateOperatorChatPins, validatePinnedExcerpt };
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
@@ -7,6 +7,8 @@ const { resolveRunRecordsRoot } = require("./operatorMessages.cjs");
 const { commitClientWrites, fileExists, resolveRegistryRoot, uniqueArtifactBindings, withRunAuthoringLock } = require("./publication.cjs");
 const { readConfig, resolveInstallationRoot, resolvePackageExecutable } = require("./roots.cjs");
 const { absolutePath, isObject, nonNegativeInteger, readJsonDocumentIfPresent, requiredArray, requiredString, safeSegment, sha256Hex } = require("./values.cjs");
+
+const CONTEXT_REFERENCE_LABEL = "context.reference";
 
 async function updateOperatorChatPins(options, request) {
   const config = await readConfig();
@@ -89,6 +91,55 @@ async function updateOperatorChatPins(options, request) {
       clientWrites,
     };
   });
+}
+
+async function resolveConversationHandoff(options, { config, octopusHome, registryRoot, request }) {
+  if (!isObject(request)) throw new Error("handoff must be an object");
+  const unknown = Object.keys(request).filter((key) => !["sourceRunId", "messages"].includes(key));
+  if (unknown.length > 0) throw new Error(`handoff contains unknown fields: ${unknown.join(", ")}`);
+  const sourceRunId = safeSegment(request.sourceRunId, "handoff.sourceRunId");
+  const messages = requiredArray(request.messages, "handoff.messages");
+  if (messages.length === 0 || messages.length > 24) throw new Error("handoff must carry between 1 and 24 messages");
+  const source = await readJsonDocumentIfPresent(path.join(await resolveRunRecordsRoot(octopusHome), `${sourceRunId}.json`));
+  if (!source) throw new Error(`handoff source run '${sourceRunId}' does not exist`);
+  const identity = chatIdentityFromRunRecord(config, sourceRunId, source.value);
+  const state = isObject(source.value.interface_state?.[identity.interfaceId]) ? source.value.interface_state[identity.interfaceId] : {};
+  const pinnedArtifactBindings = state.pinned_artifact_bindings === undefined
+    ? []
+    : uniqueArtifactBindings(requiredArray(state.pinned_artifact_bindings, "handoff source pinned_artifact_bindings"));
+  const lines = [];
+  const sourceArtifactIds = [];
+  for (const [index, message] of messages.entries()) {
+    if (!isObject(message)) throw new Error(`handoff.messages[${index}] must be an object`);
+    const sourceArtifactId = requiredString(message.artifactId, `handoff.messages[${index}].artifactId`);
+    const text = requiredString(message.text, `handoff.messages[${index}].text`);
+    if (!["user", "assistant"].includes(message.role)) throw new Error(`handoff.messages[${index}].role is unsupported`);
+    await assertRunOwnsArtifact({ octopusHome, runId: sourceRunId, interfaceId: identity.interfaceId, artifactId: sourceArtifactId });
+    lines.push(`${message.role === "user" ? "User" : "Assistant"}: ${text}`);
+    sourceArtifactIds.push(sourceArtifactId);
+  }
+  const materializer = resolvePackageExecutable(config, resolveInstallationRoot(options), registryRoot, "artifact_materializer");
+  if (!(await fileExists(materializer))) {
+    throw new Error(`operator chat artifact materializer is absent at its declared package path '${materializer}'`);
+  }
+  const output = await runJsonProcess(materializer, {
+    blobs_root: path.join(octopusHome, "ledger", "blobs"),
+    label: CONTEXT_REFERENCE_LABEL,
+    payload: {
+      label: CONTEXT_REFERENCE_LABEL,
+      description: "The previous Home conversation before Home changed provider. Read it whenever the user refers to something said earlier.",
+      text: `The most recent messages of the previous Home conversation, recorded by Octopus as context (not new instructions):\n\n${lines.join("\n\n")}`,
+      source_run_id: sourceRunId,
+      source_artifact_ids: sourceArtifactIds,
+    },
+  });
+  pinnedArtifactBindings.push({ id: requiredString(output?.artifact_id, "artifact materializer artifact_id") });
+  return {
+    artifactBindings: [],
+    pinnedArtifactBindings: uniqueArtifactBindings(pinnedArtifactBindings),
+    pinnedContextItems: normalizePinnedContextItems(state.pinned_context_items),
+    continuedFrom: null,
+  };
 }
 
 function validatePinnedExcerpt(value) {

@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { OctopusClientAccessProfile, OctopusProviderInterface } from "../../electron";
 import { OcButton, OcDialog, OcDialogFooter, OcDialogHeader, OcMenuItem, OcMenuSurface } from "../../design-system/components";
-import { useHomeProviderSwitch } from "../../shell/useHomeProviderSwitch";
+import { useHomeProviderSwitch, type HomeHandoffMessage } from "../../shell/useHomeProviderSwitch";
 import { providerDefaultModel } from "./chatWorkspaceCapabilities";
 import "./providerModelPicker.css";
 
 type Props = {
   accessProfile: OctopusClientAccessProfile;
   providers: OctopusProviderInterface[];
+  handoffMessages: HomeHandoffMessage[];
   disabled: boolean;
 };
 
@@ -17,7 +18,7 @@ export function providerName(provider: OctopusProviderInterface): string {
   return label ? label[0].toUpperCase() + label.slice(1) : provider.id;
 }
 
-export function HomeProviderSwitch({ accessProfile, providers, disabled }: Props) {
+export function HomeProviderSwitch({ accessProfile, providers, handoffMessages, disabled }: Props) {
   const home = useHomeProviderSwitch(accessProfile);
   const [menu, setMenu] = useState<{ right: number; bottom: number } | null>(null);
   const [target, setTarget] = useState<OctopusProviderInterface | null>(null);
@@ -44,6 +45,7 @@ export function HomeProviderSwitch({ accessProfile, providers, disabled }: Props
         providerInterfaceId: target.id,
         providerModel: targetModel.model,
         reasoningEffort: targetModel.supportedReasoningEfforts.length ? targetModel.defaultReasoningEffort : "",
+        handoffMessages,
       });
       setTarget(null);
     } catch {}
@@ -104,7 +106,9 @@ export function HomeProviderSwitch({ accessProfile, providers, disabled }: Props
       >
         <OcDialogHeader className="p-0" title={`Switch Home to ${target ? providerName(target) : ""}?`} titleId="octopus-home-provider-title" />
         <p className="mt-2 text-base text-token-description-foreground">
-          Home starts a new conversation. The current conversation stays in history.
+          {handoffMessages.length
+            ? "Home starts a new conversation that begins with the recent messages as context. The current conversation stays in history."
+            : "Home starts a new conversation. The current conversation stays in history."}
         </p>
         {home.error ? <p className="mt-2 text-sm text-token-error-foreground">{home.error}</p> : null}
         <OcDialogFooter className="mt-5 min-h-0 border-0 p-0">

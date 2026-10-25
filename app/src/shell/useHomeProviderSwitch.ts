@@ -7,6 +7,14 @@ export type HomeProviderSelection = {
   providerInterfaceId: string;
   providerModel: string;
   reasoningEffort: string;
+  handoffMessages: HomeHandoffMessage[];
+};
+
+export type HomeHandoffMessage = {
+  artifactId: string;
+  messageId: string;
+  role: "user" | "assistant";
+  text: string;
 };
 
 type HomeScope = {
@@ -53,6 +61,7 @@ export function useHomeProviderSwitch(profile: OctopusClientAccessProfile) {
         providerModel: selection.providerModel,
         reasoningEffort: selection.reasoningEffort,
         expectedHomeRunDigest: scope.homeRunDigest,
+        ...(selection.handoffMessages.length ? { handoffMessages: selection.handoffMessages } : {}),
       });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));

@@ -336,6 +336,12 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
       recoveryErrors.push(errorMessage(error));
     }
   }
+  let switching = [];
+  try {
+    switching = await pendingHomeSwitches(roots);
+  } catch (error) {
+    recoveryErrors.push(errorMessage(error));
+  }
   const receiptedProjectEeIds = new Set();
   for (const entry of await workspaceReceiptEntries(roots.projectReceiptsRoot)) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) {
@@ -359,7 +365,6 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
   }
   try {
     const topology = await findWorkspaceTopology(roots, true);
-    const switching = await pendingHomeSwitches(roots);
     const expectedRoots = new Set([...receipts.map((receipt) => receipt.root_ee_id), ...receiptedProjectEeIds]);
     const expectedRuns = new Set([
       ...receipts.map((receipt) => receipt.home_run_id),
@@ -382,6 +387,7 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
     status: recoveryErrors.length ? "degraded" : receipts.length ? "configured" : "not_configured",
     receipt: receipts[0] ?? null,
     home: homes.at(-1) ?? null,
+    switching: switching.length > 0,
     errors: recoveryErrors,
   };
 }
@@ -742,7 +748,7 @@ function parseProjectMutationRequest(value) {
     [
       "action", "operationId", "workspace", "parentEeId", "expectedParentDigest", "templateName",
       "name", "goal", "presentation", "eeId", "expectedProjectDigest", "projects", "sourceFolders",
-      "providerInterfaceId", "providerModel", "reasoningEffort", "serviceTier", "expectedHomeRunDigest",
+      "providerInterfaceId", "providerModel", "reasoningEffort", "serviceTier", "expectedHomeRunDigest", "handoffMessages",
     ],
     ["action", "operationId", "workspace"],
     "Workspace project mutation",
@@ -763,6 +769,7 @@ function parseProjectMutationRequest(value) {
       reasoningEffort: optionalText(request.reasoningEffort, "Home reasoning effort", 80),
       serviceTier: optionalText(request.serviceTier, "Home service tier", 80),
       expectedHomeRunDigest: requiredDigest(request.expectedHomeRunDigest, "Home run digest"),
+      handoffMessages: parseHandoffMessages(request.handoffMessages ?? []),
     };
   } else if (request.action === "create_project") {
     const presentation = exactObject(request.presentation, ["icon", "color"], ["icon", "color"], "Project presentation");
@@ -822,6 +829,23 @@ function parseProjectMutationRequest(value) {
     ...canonical,
     digest: sha256(Buffer.from(stableJson(canonical))),
   };
+}
+
+function parseHandoffMessages(value) {
+  if (!Array.isArray(value) || value.length > 24) throw new Error("Home handoff must carry at most 24 messages");
+  return value.map((message, index) => {
+    const row = exactObject(message, ["artifactId", "messageId", "role", "text"], ["artifactId", "messageId", "role", "text"], `Home handoff message ${index + 1}`);
+    if (!["user", "assistant"].includes(row.role)) throw new Error(`Home handoff message ${index + 1} has an unsupported role`);
+    if (typeof row.text !== "string" || !row.text.trim() || row.text.length > 16000) {
+      throw new Error(`Home handoff message ${index + 1} must carry text up to 16000 characters`);
+    }
+    return {
+      artifactId: requiredHumanText(row.artifactId, `Home handoff message ${index + 1} artifact`, 1024),
+      messageId: requiredHumanText(row.messageId, `Home handoff message ${index + 1} id`, 1024),
+      role: row.role,
+      text: row.text,
+    };
+  });
 }
 
 function parseProjectWorkspace(value) {
@@ -1018,6 +1042,9 @@ async function planHomeProviderSwitch(roots, scope, request, planOperatorSurface
         : {}),
       eeId: scope.rootEeId,
       clientSurfaceRole: "home",
+      ...(request.handoffMessages.length
+        ? { handoff: { sourceRunId: scope.homeRunId, messages: request.handoffMessages } }
+        : {}),
     },
   }), intent, materialized);
   if (stableJson(plan.authoringProfile) !== stableJson(profile)) {

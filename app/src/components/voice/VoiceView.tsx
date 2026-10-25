@@ -27,6 +27,7 @@ import { Glyph, type GlyphName } from "../IconGlyphs";
 import { ShellTooltip } from "../shell/ShellTooltip";
 import { ChatComposer } from "../chat/ChatComposer";
 import { HomeProviderSwitch } from "../chat/HomeProviderSwitch";
+import type { HomeHandoffMessage } from "../../shell/useHomeProviderSwitch";
 import type { ProjectedFileSource } from "../chat/ProjectedFilePicker";
 import { AirHandVoiceController } from "./AirHandVoiceController";
 import { HomeCallControls } from "./HomeCallControls";
@@ -987,6 +988,19 @@ function formatResponseArtifactType(attachment: ChatAttachmentView): string {
   return attachment.label || "Artifact";
 }
 
+const HOME_HANDOFF_MESSAGES = 12;
+
+function homeHandoffMessages(messages: readonly ChatRenderMessage[]): HomeHandoffMessage[] {
+  return messages
+    .flatMap((message): HomeHandoffMessage[] => (
+      (message.role === "user" || message.role === "assistant") && message.eventKind === "message"
+        && message.artifactId && message.text.trim() && !message.pending && !message.error
+        ? [{ artifactId: message.artifactId, messageId: message.id, role: message.role, text: message.text.slice(0, 16000) }]
+        : []
+    ))
+    .slice(-HOME_HANDOFF_MESSAGES);
+}
+
 function HomeCommandDock({ awaitingClientResult, callActive, commandsActive, onVoiceStart, voiceStartDisabled, callControls, projectedFileSources, workspace }: {
   awaitingClientResult: boolean;
   callActive: boolean;
@@ -1040,6 +1054,7 @@ function HomeCommandDock({ awaitingClientResult, callActive, commandsActive, onV
             <HomeProviderSwitch
               accessProfile={workspace.accessProfile}
               disabled={workspace.busy || workspace.turnOpen || awaitingClientResult || workspace.queuedTurns.length > 0}
+              handoffMessages={homeHandoffMessages(workspace.renderedMessages)}
               providers={workspace.providerInterfaces}
             />
           )}
