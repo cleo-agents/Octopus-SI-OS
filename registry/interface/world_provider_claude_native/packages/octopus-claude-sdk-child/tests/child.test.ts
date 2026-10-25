@@ -14,7 +14,7 @@ function fakeClaude(account: string): { dir: string; executable: string } {
   writeFileSync(executable, `#!/bin/sh
 case "$1" in
   --version) echo "2.1.310 (Claude Code)" ;;
-  auth) echo '${account}' ;;
+  auth) echo '${account}'; case '${account}' in *'"loggedIn":false'*) exit 1 ;; esac ;;
   *) exit 70 ;;
 esac
 `);

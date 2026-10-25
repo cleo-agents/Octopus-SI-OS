@@ -22,6 +22,7 @@ type Emit = (event: Event) => void;
 type ActiveTurn = {
   id: string;
   interrupted: boolean;
+  claudeError: string | null;
 };
 
 class UserMessageQueue implements AsyncIterable<SDKUserMessage> {
@@ -126,7 +127,7 @@ export class Session {
     if (this.active) {
       throw new ChildFailure("turn_in_progress", `turn '${this.active.id}' is still running in session '${this.id}'`);
     }
-    this.active = { id: turnId, interrupted: false };
+    this.active = { id: turnId, interrupted: false, claudeError: null };
     this.input.push({
       type: "user",
       message: { role: "user", content: text },
@@ -205,6 +206,10 @@ export class Session {
       this.fail(new ChildFailure("unexpected_output", "Claude Code produced output outside a turn"));
       return;
     }
+    if (message.error) {
+      turn.claudeError ??= message.error;
+      return;
+    }
     for (const block of message.message.content) {
       if (block.type === "text") {
         this.emit({ type: "item", session: this.id, turn: turn.id, item: { kind: "text", text: block.text } });
@@ -239,7 +244,7 @@ export class Session {
       duration_ms: message.duration_ms,
       num_turns: message.num_turns,
     });
-    const succeeded = message.subtype === "success" && !message.is_error;
+    const succeeded = message.subtype === "success" && !message.is_error && turn.claudeError === null;
     if (!succeeded && !turn.interrupted) {
       const detail = message.subtype === "success" ? message.result : message.errors.join("; ");
       this.emit({
@@ -247,8 +252,8 @@ export class Session {
         request_id: null,
         session: this.id,
         turn: turn.id,
-        code: "claude_turn_failed",
-        message: `Claude Code turn ended with ${message.subtype}${detail ? `: ${detail}` : ""}`,
+        code: turn.claudeError ? `claude_${turn.claudeError}` : "claude_turn_failed",
+        message: `Claude Code turn failed (${turn.claudeError ?? message.subtype})${detail ? `: ${detail}` : ""}`,
         fatal: false,
       });
     }

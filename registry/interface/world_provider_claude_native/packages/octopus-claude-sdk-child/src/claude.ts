@@ -46,12 +46,12 @@ function assertExecutable(candidate: string): void {
   }
 }
 
-function runClaude(executable: string, args: string[], timeoutMs: number): string {
+function runClaude(executable: string, args: string[], timeoutMs: number, acceptedStatuses: number[] = [0]): string {
   const result = spawnSync(executable, args, { encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "pipe"] });
   if (result.error) {
     throw new ChildFailure("claude_executable_failed", `Claude Code '${args.join(" ")}' failed: ${result.error.message}`);
   }
-  if (result.status !== 0) {
+  if (result.status === null || !acceptedStatuses.includes(result.status)) {
     throw new ChildFailure("claude_executable_failed", `Claude Code '${args.join(" ")}' exited with status ${result.status}`);
   }
   return result.stdout;
@@ -73,7 +73,7 @@ export type AccountState = {
 export function claudeAccountState(executable: string): AccountState {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(runClaude(executable, ["auth", "status", "--json"], 4000));
+    parsed = JSON.parse(runClaude(executable, ["auth", "status", "--json"], 4000, [0, 1]));
   } catch (error) {
     if (error instanceof ChildFailure) throw error;
     throw new ChildFailure("claude_account_unreadable", "Claude Code account status is not JSON");
