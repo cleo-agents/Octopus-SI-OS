@@ -73,6 +73,7 @@ pub struct Usage {
 pub struct Item {
     pub kind: ItemKind,
     pub text: String,
+    pub message_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -97,6 +98,7 @@ pub enum Event {
     Ack { request_id: u64 },
     Session { session: String, claude_session_id: String, model: String, tools: Vec<String> },
     Item { session: String, turn: String, item: Item },
+    TextDelta { session: String, turn: String, message_id: String, text: String },
     ToolCall { session: String, turn: String, call_id: String, name: String, input: serde_json::Map<String, Value> },
     Usage { session: String, turn: String, usage: Usage, total_cost_usd: serde_json::Number, duration_ms: serde_json::Number, num_turns: u64 },
     TurnEnd { session: String, turn: String, status: TurnStatus, result: Option<String>, claude_session_id: Option<String> },

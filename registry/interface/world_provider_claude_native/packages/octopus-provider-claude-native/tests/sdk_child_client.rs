@@ -38,16 +38,22 @@ async fn a_turn_streams_its_items_and_ends_once() {
     child.start("s", config(dir.path())).await.unwrap();
     child.turn("s", "t", vec![TextInput::new("hello")]).await.unwrap();
     let mut texts = Vec::new();
+    let mut deltas = Vec::new();
     let mut cost = None;
     let end = loop {
         match child.next_event().await.unwrap() {
-            Event::Item { item, .. } if item.kind == ItemKind::Text => texts.push(item.text),
+            Event::Item { item, .. } if item.kind == ItemKind::Text => {
+                assert_eq!(item.message_id.as_deref(), Some("msg_fake"));
+                texts.push(item.text)
+            }
+            Event::TextDelta { message_id, text, .. } => deltas.push((message_id, text)),
             Event::Usage { total_cost_usd, .. } => cost = total_cost_usd.as_f64(),
             Event::TurnEnd { status, claude_session_id, .. } => break (status, claude_session_id),
             _ => {}
         }
     };
     assert_eq!(texts, ["echo: hello"]);
+    assert_eq!(deltas, [("msg_fake".to_string(), "echo: ".to_string()), ("msg_fake".to_string(), "hello".to_string())]);
     assert_eq!(cost, Some(0.0009085));
     assert_eq!(end, (TurnStatus::Completed, Some("c-1".to_string())));
     let refused = child.tool_result("s", "t", "c", Vec::new(), false).await.unwrap_err();

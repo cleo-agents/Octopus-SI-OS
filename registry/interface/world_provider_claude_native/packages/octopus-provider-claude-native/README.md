@@ -19,3 +19,18 @@ while the configured executable is not granted.
 Claude Code keeps its own sign-in. On macOS a claude.ai sign-in is read from
 the login Keychain, which `life.json` grants through `/usr/bin/security` and
 read access to `~/Library/Keychains`.
+
+## Inputs, replies and streaming
+
+The life accepts the labels declared in `private_config.input_messages`,
+decoded by the same contract the Codex provider reads. A `realtime.delegation`
+from a voice call is an ordinary Home turn: its whole payload, including
+`call_id`, `correlation_id` and `delegation_id`, reaches Claude unchanged in one
+`input_message_context` block. Every reply and turn error carries `in_reply_to`,
+the admitted input it answers, which is how the client attributes an answer to
+its voice delegation.
+
+Claude's text streams while the turn runs as `agent.message.delta` events in an
+open `turn.stream` under the interface's `var/streams/`, in the layout the
+operator chat client tails. The sealed stream is handed just before the reply,
+whose item id is the streamed message it completes.

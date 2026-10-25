@@ -107,7 +107,16 @@ export const itemEvent = z.strictObject({
   item: z.strictObject({
     kind: z.enum(["text", "thinking"]),
     text: z.string(),
+    message_id: z.string().min(1).nullable(),
   }),
+});
+
+export const textDeltaEvent = z.strictObject({
+  type: z.literal("text_delta"),
+  session: name,
+  turn: name,
+  message_id: z.string().min(1),
+  text: z.string().min(1),
 });
 
 export const toolCallEvent = z.strictObject({
@@ -153,6 +162,7 @@ export const event = z.discriminatedUnion("type", [
   ackEvent,
   sessionEvent,
   itemEvent,
+  textDeltaEvent,
   toolCallEvent,
   usageEvent,
   turnEndEvent,

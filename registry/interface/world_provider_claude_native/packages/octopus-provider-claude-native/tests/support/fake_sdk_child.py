@@ -20,7 +20,9 @@ for line in sys.stdin:
         if text == "die":
             sys.exit(3)
         emit({"type": "session", "session": session, "claude_session_id": "c-1", "model": "m", "tools": []})
-        emit({"type": "item", "session": session, "turn": turn, "item": {"kind": "text", "text": "echo: " + text}})
+        for part in ("echo: ", text):
+            emit({"type": "text_delta", "session": session, "turn": turn, "message_id": "msg_fake", "text": part})
+        emit({"type": "item", "session": session, "turn": turn, "item": {"kind": "text", "text": "echo: " + text, "message_id": "msg_fake"}})
         emit({"type": "usage", "session": session, "turn": turn, "usage": {"input_tokens": 1, "output_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "total_cost_usd": 0.0009085, "duration_ms": 1033.5, "num_turns": 1})
         emit({"type": "turn_end", "session": session, "turn": turn, "status": "completed", "result": "echo: " + text, "claude_session_id": "c-1"})
     elif kind == "close":

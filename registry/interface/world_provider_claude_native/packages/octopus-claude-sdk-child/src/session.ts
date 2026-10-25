@@ -24,6 +24,7 @@ type ActiveTurn = {
   id: string;
   interrupted: boolean;
   claudeError: string | null;
+  streamingMessageId: string | null;
 };
 
 class UserMessageQueue implements AsyncIterable<SDKUserMessage> {
@@ -110,6 +111,7 @@ export class Session {
         skills: [],
         plugins: [],
         verbatimPrompts: true,
+        includePartialMessages: true,
         permissionMode: "dontAsk",
         stderr: (data) => process.stderr.write(data),
       },
@@ -123,7 +125,7 @@ export class Session {
     if (this.active) {
       throw new ChildFailure("turn_in_progress", `turn '${this.active.id}' is still running in session '${this.id}'`);
     }
-    this.active = { id: turnId, interrupted: false, claudeError: null };
+    this.active = { id: turnId, interrupted: false, claudeError: null, streamingMessageId: null };
     this.input.push({
       type: "user",
       message: { role: "user", content: text },
@@ -190,6 +192,9 @@ export class Session {
       case "assistant":
         this.admitAssistant(message);
         return;
+      case "stream_event":
+        this.admitStreamEvent(message);
+        return;
       case "result":
         this.admitResult(message);
         return;
@@ -212,6 +217,19 @@ export class Session {
     this.emit({ type: "session", session: this.id, claude_session_id: message.session_id, model: message.model, tools: message.tools });
   }
 
+  private admitStreamEvent(message: Extract<SDKMessage, { type: "stream_event" }>): void {
+    if (message.parent_tool_use_id !== null) return;
+    const turn = this.active;
+    if (!turn) return;
+    const event = message.event;
+    if (event.type === "message_start") {
+      turn.streamingMessageId = event.message.id;
+    } else if (event.type === "content_block_delta" && event.delta.type === "text_delta" && event.delta.text.length > 0) {
+      if (turn.streamingMessageId === null) return;
+      this.emit({ type: "text_delta", session: this.id, turn: turn.id, message_id: turn.streamingMessageId, text: event.delta.text });
+    }
+  }
+
   private admitAssistant(message: Extract<SDKMessage, { type: "assistant" }>): void {
     if (message.parent_tool_use_id !== null) return;
     const turn = this.active;
@@ -225,9 +243,9 @@ export class Session {
     }
     for (const block of message.message.content) {
       if (block.type === "text") {
-        this.emit({ type: "item", session: this.id, turn: turn.id, item: { kind: "text", text: block.text } });
+        this.emit({ type: "item", session: this.id, turn: turn.id, item: { kind: "text", text: block.text, message_id: message.message.id || null } });
       } else if (block.type === "thinking" && block.thinking.length > 0) {
-        this.emit({ type: "item", session: this.id, turn: turn.id, item: { kind: "thinking", text: block.thinking } });
+        this.emit({ type: "item", session: this.id, turn: turn.id, item: { kind: "thinking", text: block.thinking, message_id: message.message.id || null } });
       } else if (block.type === "tool_use" && !this.grantedTools.has(block.name)) {
         this.fail(new ChildFailure("tool_isolation_violated", `Claude Code requested ungranted tool '${block.name}'`));
         return;

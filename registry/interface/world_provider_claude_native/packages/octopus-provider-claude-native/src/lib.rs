@@ -4,12 +4,14 @@ mod context;
 mod input;
 mod journal;
 mod life;
+mod stream;
 mod tools;
 
 pub use child::{ChildError, Event, Item, ItemKind, ReadyInfo, SdkChild, SessionConfig, TextInput, ToolSpec, TurnStatus, Usage};
 pub use config::{ClaudeNativeConfig, InputMessage, RequestContextKind, SDK_CHILD_PROTOCOL, verify_claude_grant, verify_sdk_child};
 pub use input::{DecodedInput, decode as decode_input};
 pub use life::interface_life;
+pub use stream::{LiveTurn, identity_hash as stream_identity_hash, retire_open_streams};
 
 use octopus_descriptors::InterfaceId;
 

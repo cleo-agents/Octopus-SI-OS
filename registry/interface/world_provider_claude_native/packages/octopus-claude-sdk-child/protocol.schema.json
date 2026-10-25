@@ -401,11 +401,23 @@
                 },
                 "text": {
                   "type": "string"
+                },
+                "message_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
                 "kind",
-                "text"
+                "text",
+                "message_id"
               ],
               "additionalProperties": false
             }
@@ -415,6 +427,41 @@
             "session",
             "turn",
             "item"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text_delta"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "message_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "message_id",
+            "text"
           ],
           "additionalProperties": false
         },
