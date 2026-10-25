@@ -171,6 +171,73 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "steer"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "as_turn": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "turn",
+            "as_turn",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "interrupt"
             },
             "request_id": {
@@ -462,6 +529,39 @@
             "turn",
             "message_id",
             "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "input_recorded"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "text": {
+              "type": "string"
+            },
+            "synthetic": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "text",
+            "synthetic"
           ],
           "additionalProperties": false
         },

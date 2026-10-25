@@ -88,6 +88,11 @@ impl TurnStream {
         })
     }
 
+    pub fn append_row_synced(&mut self, row: Value) -> Result<(), String> {
+        self.append(row)?;
+        self.body.sync_data().map_err(|error| format!("turn stream row could not be synced: {error}"))
+    }
+
     pub fn append_event(&mut self, source_movement_seq: u64, label: &str, payload: Value) -> Result<(), String> {
         self.append(json!({"type": "event", "source_movement_seq": source_movement_seq, "label": label, "payload": payload}))
     }
@@ -259,7 +264,7 @@ pub struct LiveTurn {
     streams_root: PathBuf,
     provider_interface: String,
     run: String,
-    thread_id: String,
+    thread_id: Option<String>,
     pub turn_id: String,
     pub source_movement_seq: u64,
     stream: Option<TurnStream>,
@@ -270,12 +275,17 @@ pub struct LiveTurn {
 }
 
 impl LiveTurn {
-    pub fn new(streams_root: PathBuf, provider_interface: &str, run: &str, thread_id: &str, turn_id: &str, source_movement_seq: u64) -> Self {
+    /// `thread_id` is the Claude session id when it is already known; a
+    /// fresh session reports it before its first text, and
+    /// [`LiveTurn::set_thread_id`] records it then. It is the id the
+    /// terminal reply also carries, so the client keys the stream and the
+    /// reply to one native turn.
+    pub fn new(streams_root: PathBuf, provider_interface: &str, run: &str, thread_id: Option<&str>, turn_id: &str, source_movement_seq: u64) -> Self {
         Self {
             streams_root,
             provider_interface: provider_interface.into(),
             run: run.into(),
-            thread_id: thread_id.into(),
+            thread_id: thread_id.map(str::to_owned),
             turn_id: turn_id.into(),
             source_movement_seq,
             stream: None,
@@ -284,6 +294,56 @@ impl LiveTurn {
             last_flush: std::time::Instant::now(),
             streamed: Vec::new(),
         }
+    }
+
+    pub fn set_thread_id(&mut self, thread_id: &str) -> Result<(), String> {
+        match &self.thread_id {
+            Some(current) if current == thread_id => Ok(()),
+            Some(_) if self.stream.is_some() => Err("a turn stream cannot change its thread id once open".into()),
+            _ => {
+                self.thread_id = Some(thread_id.to_string());
+                Ok(())
+            }
+        }
+    }
+
+    pub fn thread_id(&self) -> Option<&str> {
+        self.thread_id.as_deref()
+    }
+
+    fn ensure_open(&mut self) -> Result<&mut TurnStream, String> {
+        if self.stream.is_none() {
+            let thread_id = self.thread_id.as_deref().ok_or("a turn stream cannot open before Claude reports its session")?;
+            self.stream = Some(TurnStream::open(
+                &self.streams_root,
+                &self.provider_interface,
+                &self.run,
+                thread_id,
+                &self.turn_id,
+                self.source_movement_seq,
+            )?);
+        }
+        Ok(self.stream.as_mut().expect("opened above"))
+    }
+
+    /// Records that a steering message entered this turn, in the row the
+    /// chat client reads to mark the message as included.
+    pub fn input_recorded(&mut self, client_id: &str, item_id: &str) -> Result<(), String> {
+        self.flush()?;
+        let row = json!({
+            "type": "input_recorded",
+            "source_movement_seq": self.source_movement_seq,
+            "provider_interface": self.provider_interface,
+            "run": self.run,
+            "thread_id": self.thread_id.as_deref().ok_or("a turn stream cannot record input before Claude reports its session")?,
+            "turn_id": self.turn_id,
+            "item_id": item_id,
+            "client_id": client_id,
+            "stage": "input_recorded_in_turn",
+            "source_event": "item/started",
+            "native_event_at_ms": unix_time_ms()?,
+        });
+        self.ensure_open()?.append_row_synced(row)
     }
 
     pub fn delta(&mut self, message_id: &str, text: &str) -> Result<(), String> {
@@ -306,17 +366,11 @@ impl LiveTurn {
     }
 
     pub fn flush(&mut self) -> Result<(), String> {
-        let Some((message_id, text)) = self.pending.take() else { return Ok(()) };
-        if self.stream.is_none() {
-            self.stream = Some(TurnStream::open(
-                &self.streams_root,
-                &self.provider_interface,
-                &self.run,
-                &self.thread_id,
-                &self.turn_id,
-                self.source_movement_seq,
-            )?);
+        if self.pending.is_none() {
+            return Ok(());
         }
+        self.ensure_open()?;
+        let (message_id, text) = self.pending.take().expect("checked above");
         let payload = json!({
             "seq": self.delta_seq,
             "text": text,
@@ -346,6 +400,16 @@ impl LiveTurn {
             (None, None) => return None,
         };
         (text.trim() == reply_text.trim()).then(|| id.clone())
+    }
+
+    /// The text streamed so far for the latest message, written or pending.
+    pub fn streamed_text(&self) -> Option<String> {
+        match (&self.pending, self.streamed.last()) {
+            (Some((pending_id, pending)), Some((id, streamed))) if id == pending_id => Some(format!("{streamed}{pending}")),
+            (Some((_, pending)), _) => Some(pending.clone()),
+            (None, Some((_, streamed))) => Some(streamed.clone()),
+            (None, None) => None,
+        }
     }
 
     pub fn boundary(&mut self, label: &str, artifact: &InterfaceArtifactFile) -> Result<(), String> {

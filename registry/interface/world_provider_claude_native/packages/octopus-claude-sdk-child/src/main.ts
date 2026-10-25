@@ -80,6 +80,10 @@ async function serve(claudeExecutable: string): Promise<number> {
         write({ type: "ack", request_id: frame.request_id });
         return;
       }
+      case "steer":
+        await existing(frame.session).steer(frame.turn, frame.input.map((part) => part.text).join("\n\n"), frame.as_turn);
+        write({ type: "ack", request_id: frame.request_id });
+        return;
       case "interrupt":
         await existing(frame.session).interrupt(frame.turn);
         write({ type: "ack", request_id: frame.request_id });

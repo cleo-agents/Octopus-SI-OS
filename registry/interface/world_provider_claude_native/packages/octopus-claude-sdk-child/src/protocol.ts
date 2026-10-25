@@ -42,6 +42,15 @@ export const turnCommand = z.strictObject({
   input: z.array(textInput).min(1),
 });
 
+export const steerCommand = z.strictObject({
+  type: z.literal("steer"),
+  request_id: requestId,
+  session: name,
+  turn: name,
+  as_turn: name.nullable(),
+  input: z.array(textInput).min(1),
+});
+
 export const interruptCommand = z.strictObject({
   type: z.literal("interrupt"),
   request_id: requestId,
@@ -68,6 +77,7 @@ export const closeCommand = z.strictObject({
 export const command = z.discriminatedUnion("type", [
   startCommand,
   turnCommand,
+  steerCommand,
   interruptCommand,
   toolResultCommand,
   closeCommand,
@@ -119,6 +129,14 @@ export const textDeltaEvent = z.strictObject({
   text: z.string().min(1),
 });
 
+export const inputRecordedEvent = z.strictObject({
+  type: z.literal("input_recorded"),
+  session: name,
+  turn: name,
+  text: z.string(),
+  synthetic: z.boolean(),
+});
+
 export const toolCallEvent = z.strictObject({
   type: z.literal("tool_call"),
   session: name,
@@ -163,6 +181,7 @@ export const event = z.discriminatedUnion("type", [
   sessionEvent,
   itemEvent,
   textDeltaEvent,
+  inputRecordedEvent,
   toolCallEvent,
   usageEvent,
   turnEndEvent,

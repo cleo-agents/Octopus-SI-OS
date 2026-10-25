@@ -44,3 +44,20 @@ Claude's text streams while the turn runs as `agent.message.delta` events in an
 open `turn.stream` under the interface's `var/streams/`, in the layout the
 operator chat client tails. The sealed stream is handed just before the reply,
 whose item id is the streamed message it completes.
+
+## Controls and restarts
+
+While Claude runs, the life reads the ledger through a second cursor for the
+run's controls. A stop or interrupt ends the Claude turn and is acknowledged
+as `turn.control.acknowledged`; the turn then ends with the text streamed so
+far, as a reply whose lifecycle is `interrupted`. A new message for the same
+run redirects the turn: Claude is interrupted and the message runs as the next
+Claude turn in the same session, acknowledged as a steer and recorded in the
+turn stream when Claude takes it up. A control that arrives while the run is
+waiting on an Octopus tool abandons that call; its result is later closed as
+`turn.interrupted.result`.
+
+The journal records the turn in flight and any tool call it handed. After a
+restart, a result for such a call resumes the run's Claude session and reaches
+Claude as a message; a source cut mid-answer is replayed by asking Claude to
+answer it again in full.

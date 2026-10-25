@@ -42,6 +42,24 @@ pub fn assemble(
     session_artifacts: &[SessionContextArtifact],
     replay_history: bool,
 ) -> Result<TurnContext, String> {
+    let payload: Value = serde_json::from_slice(&envelope.read_artifact_payload().map_err(|error| error.to_string())?)
+        .map_err(|error| format!("input artifact is not JSON: {error}"))?;
+    let text = crate::input::decode(label, input, &payload)?.prompt_text();
+    assemble_with_text(envelope, record_bytes, instruction_selection, session_artifacts, replay_history, &text)
+}
+
+/// Assembles a turn whose user text is `text` rather than the source
+/// artifact's declared input: the note that continues a turn a restart cut,
+/// or a tool result carried into a resumed session. The system prompt, the
+/// grant block and the replayed history come from the source as usual.
+pub fn assemble_with_text(
+    envelope: &InterfaceInvocationEnvelope,
+    record_bytes: &[u8],
+    instruction_selection: &[String],
+    session_artifacts: &[SessionContextArtifact],
+    replay_history: bool,
+    text: &str,
+) -> Result<TurnContext, String> {
     let metadata = envelope.metadata().map_err(|error| error.to_string())?;
     let record = RunRecord::from_bytes(record_bytes).map_err(|error| error.to_string())?;
     let payloads = octopus_run_authoring::context_artifact_payloads(&record, metadata, &envelope.artifact_binding_payloads)?;
@@ -55,10 +73,6 @@ pub fn assemble(
     if !bound.is_empty() {
         system.push(format!("Bound context artifacts\n\n{}", bound.join("\n\n")));
     }
-
-    let payload: Value = serde_json::from_slice(&envelope.read_artifact_payload().map_err(|error| error.to_string())?)
-        .map_err(|error| format!("input artifact is not JSON: {error}"))?;
-    let text = crate::input::decode(label, input, &payload)?.prompt_text();
 
     let mut prompt = String::new();
     if let Some(grant) = octopus_model_context_render::render_model_context_block(metadata) {
@@ -77,7 +91,7 @@ pub fn assemble(
             prompt.push_str("\n\nCurrent message:\n");
         }
     }
-    prompt.push_str(&text);
+    prompt.push_str(text);
     Ok(TurnContext { system_prompt: system.join("\n\n"), prompt })
 }
 

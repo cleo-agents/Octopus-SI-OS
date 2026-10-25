@@ -25,6 +25,12 @@ type ActiveTurn = {
   interrupted: boolean;
   claudeError: string | null;
   streamingMessageId: string | null;
+  /** A steer text waiting to start its own Claude turn once the interrupted one has ended. */
+  steer: string | null;
+  /** The turn id the steer's own Claude turn reports under. */
+  steerTurnId: string | null;
+  /** True while the Claude turn running is the steer's own. */
+  steering: boolean;
 };
 
 class UserMessageQueue implements AsyncIterable<SDKUserMessage> {
@@ -125,12 +131,34 @@ export class Session {
     if (this.active) {
       throw new ChildFailure("turn_in_progress", `turn '${this.active.id}' is still running in session '${this.id}'`);
     }
-    this.active = { id: turnId, interrupted: false, claudeError: null, streamingMessageId: null };
+    this.active = { id: turnId, interrupted: false, claudeError: null, streamingMessageId: null, steer: null, steerTurnId: null, steering: false };
     this.input.push({
       type: "user",
       message: { role: "user", content: text },
       parent_tool_use_id: null,
     });
+  }
+
+  /**
+   * Redirects the running turn: Claude Code is interrupted at once, and the
+   * steer text starts a new Claude turn in the same session under the same
+   * Octopus turn id, so the caller sees one turn whose answer follows the
+   * steer. Claude Code's own queueing would instead attach the text to the
+   * next tool result, or run it after the turn, neither of which the caller
+   * can observe.
+   */
+  async steer(turnId: string, text: string, asTurn: string | null): Promise<void> {
+    if (this.failed) throw this.failed;
+    if (!this.active || this.active.id !== turnId) {
+      throw new ChildFailure("turn_not_active", `turn '${turnId}' is not running in session '${this.id}'`);
+    }
+    if (this.active.steer !== null || this.active.steering) {
+      throw new ChildFailure("steer_in_progress", `turn '${turnId}' is already being steered`);
+    }
+    this.active.steer = text;
+    this.active.steerTurnId = asTurn ?? turnId;
+    this.tools?.abandonAll("the turn was steered before this tool call returned");
+    await this.query.interrupt();
   }
 
   async interrupt(turnId: string): Promise<void> {
@@ -257,6 +285,17 @@ export class Session {
     const turn = this.active;
     if (!turn) {
       this.fail(new ChildFailure("unexpected_output", "Claude Code finished a turn that was not started"));
+      return;
+    }
+    if (turn.steer !== null && !turn.interrupted) {
+      const text = turn.steer;
+      turn.steer = null;
+      turn.steering = true;
+      turn.id = turn.steerTurnId ?? turn.id;
+      turn.streamingMessageId = null;
+      this.claudeSessionId = message.session_id;
+      this.emit({ type: "input_recorded", session: this.id, turn: turn.id, text, synthetic: false });
+      this.input.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
       return;
     }
     this.active = null;

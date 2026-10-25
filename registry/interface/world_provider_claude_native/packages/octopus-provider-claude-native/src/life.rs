@@ -7,15 +7,16 @@ use std::time::Duration;
 use octopus_interface_transport::{InterfaceLifeFuture, InterfaceLiftContext, InterfaceLiftFn};
 use octopus_interfaces::{InterfaceArtifactFile, InterfaceDescriptor, InterfaceInvocationEnvelope};
 use octopus_run_authoring::{
-    ProviderEmission, ProviderEmissionRoute, ProviderHandoffSession, ProviderOutputHandoff, ProviderSourceRecovery,
-    RunAuthoringResultIdentity,
+    ProviderEmission, ProviderEmissionRoute, ProviderHandoffOutcome, ProviderHandoffSession, ProviderOutputHandoff,
+    ProviderSourceRecovery, RunAuthoringResultIdentity,
 };
 use octopus_world_pyecho_life_runtime::{LedgerTailReader, OwnOutboundMovement};
 use serde_json::{Value, json};
 
 use crate::child::{Event, ItemKind, SdkChild, SessionConfig, TextInput, TurnStatus, Usage};
 use crate::config::{ClaudeNativeConfig, verify_sdk_child};
-use crate::journal::Journal;
+use crate::controls::{ControlResult, TURN_CONTROL_LABEL, TurnControl, interrupted_result_payload};
+use crate::journal::{InflightTurn, Journal, PendingCallRecord};
 use crate::stream::LiveTurn;
 
 const REPLY_LABEL: &str = "interface.artifact.output";
@@ -24,6 +25,9 @@ const TOOL_CALL_LABEL: &str = "tool.call";
 const AUTHENTICATION_FAILURE_CODE: &str = "provider.authentication.invalid";
 const CHILD_ENVIRONMENT: [&str; 9] = ["HOME", "PATH", "USER", "LANG", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
 const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const CONTROL_READER: &str = "turn-control";
+const CONTROL_BATCH: usize = 64;
+const CUT_TURN_NOTE: &str = "Your answer to the previous message was cut off when the provider restarted. Answer that message again, in full.";
 
 pub fn interface_life() -> InterfaceLiftFn {
     Arc::new(|ctx| Box::pin(provider_life(ctx)) as InterfaceLifeFuture)
@@ -35,6 +39,7 @@ struct Provider {
     config: ClaudeNativeConfig,
     session: ProviderHandoffSession,
     journal: Journal,
+    controls: LedgerTailReader,
     child_executable: PathBuf,
     claude_cwd: PathBuf,
     streams_root: PathBuf,
@@ -42,6 +47,15 @@ struct Provider {
     child: Option<SdkChild>,
     open_sessions: BTreeMap<String, OpenSession>,
     pending_calls: BTreeMap<String, PendingCall>,
+    /// Calls whose turn was interrupted or redirected before their result
+    /// arrived. The result is closed as recorded, not returned to the model.
+    interrupted_calls: BTreeMap<String, InterruptedCall>,
+    /// Steer texts handed to the child per turn, awaiting the child's
+    /// report that Claude took them up.
+    steer_receipts: BTreeMap<String, Vec<(String, String)>>,
+    /// Turns an operator control has interrupted; their end is an answer,
+    /// not a failure.
+    interrupting: std::collections::BTreeSet<String>,
 }
 
 struct OpenSession {
@@ -56,11 +70,20 @@ struct PendingCall {
     turn: String,
     tool: String,
     live: LiveTurn,
+    /// The call outlived the life that handed it: the Claude turn that made
+    /// it is gone, and its result is carried into a resumed session.
+    recovered: bool,
+}
+
+struct InterruptedCall {
+    thread_id: Option<String>,
+    turn: String,
 }
 
 enum TurnOutcome {
     Reply(TurnReply),
     ToolCall { call_id: String, tool: String, arguments: Value, claude_session_id: Option<String> },
+    Interrupted { text: String, claude_session_id: Option<String> },
 }
 
 struct TurnReply {
@@ -80,6 +103,12 @@ impl TurnFailure {
     }
 }
 
+enum Drained {
+    Event(Option<Event>),
+    Controls,
+    Wake,
+}
+
 async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
     let descriptor = ctx.resolved_interface_descriptor()?;
     let config = ClaudeNativeConfig::from_descriptor(&descriptor)?;
@@ -90,6 +119,7 @@ async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
     let authoring_results = RunAuthoringResultIdentity::from_descriptor(&descriptor)?;
     let session = ProviderHandoffSession::new(&ctx)?;
     let mut reader = LedgerTailReader::open(&ctx)?;
+    let controls = LedgerTailReader::open_named(&ctx, CONTROL_READER)?;
     let journal = Journal::open(&ctx.var_dir, ctx.required_host_io_limits()?.max_payload_bytes)?;
     let claude_cwd = ctx.var_dir.join("claude-cwd");
     std::fs::create_dir_all(&claude_cwd).map_err(|error| format!("claude working directory cannot be created: {error}"))?;
@@ -102,6 +132,7 @@ async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
         config,
         session,
         journal,
+        controls,
         child_executable,
         claude_cwd,
         streams_root,
@@ -109,7 +140,11 @@ async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
         child: None,
         open_sessions: BTreeMap::new(),
         pending_calls: BTreeMap::new(),
+        interrupted_calls: BTreeMap::new(),
+        steer_receipts: BTreeMap::new(),
+        interrupting: std::collections::BTreeSet::new(),
     };
+    provider.restore_pending_calls();
     ctx.signal_ready().await?;
     loop {
         if ctx.cancel.is_cancelled() {
@@ -119,6 +154,10 @@ async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
         for own in reader.read_new()? {
             if ctx.cancel.is_cancelled() {
                 break;
+            }
+            if provider.journal.control_handled(own.movement.seq.0) {
+                reader.commit_through(&own)?;
+                continue;
             }
             let envelope = match reader.envelope(&own) {
                 Ok(envelope) => envelope,
@@ -144,6 +183,37 @@ async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
 }
 
 impl Provider {
+    /// Calls the previous life handed and never answered are still owed a
+    /// turn: their results are carried into the run's resumed Claude session
+    /// when they arrive.
+    fn restore_pending_calls(&mut self) {
+        for (run, entry) in self.journal.runs() {
+            let Some(inflight) = &entry.inflight else { continue };
+            let Some(record) = &inflight.pending_call else { continue };
+            let turn = format!("{}-recovered", inflight.turn);
+            let live = LiveTurn::new(
+                self.streams_root.clone(),
+                &self.provider_interface,
+                run,
+                entry.claude_session_id.as_deref(),
+                &turn,
+                inflight.source_seq,
+            );
+            self.pending_calls.insert(
+                record.call_id.clone(),
+                PendingCall {
+                    reply_to: inflight.reply_to.clone(),
+                    run: run.clone(),
+                    session: session_name(run),
+                    turn,
+                    tool: record.tool.clone(),
+                    live,
+                    recovered: true,
+                },
+            );
+        }
+    }
+
     async fn process(&mut self, own: &OwnOutboundMovement, envelope: &InterfaceInvocationEnvelope, label: &str) -> Result<(), String> {
         let seq = own.movement.seq.0;
         let runtime = envelope.runtime().map_err(|error| error.to_string())?;
@@ -165,16 +235,18 @@ impl Provider {
         if let Err(failure) = refreshed {
             return self.hand_failure(&handoff, reply_to, None, &failure).await;
         }
+        let cut = self.journal.inflight(&run).is_some_and(|inflight| inflight.source_seq == seq && inflight.pending_call.is_none());
         match recovery {
             ProviderSourceRecovery::Completed => return Ok(()),
             ProviderSourceRecovery::Process => {}
-            ProviderSourceRecovery::Interrupted { last_artifact_label } => {
+            ProviderSourceRecovery::Interrupted { last_artifact_label } if !cut || declared.is_none() => {
                 let failure = TurnFailure::new(
                     "transport_turn_interrupted",
                     format!("the provider restarted after handing '{last_artifact_label}'; the model call was not replayed"),
                 );
                 return self.hand_failure(&handoff, reply_to, None, &failure).await;
             }
+            ProviderSourceRecovery::Interrupted { .. } => {}
             ProviderSourceRecovery::Bridged { invocation_movement_seq } => {
                 let failure = TurnFailure::new(
                     "bridged_source_unsupported",
@@ -183,8 +255,11 @@ impl Provider {
                 return self.hand_failure(&handoff, reply_to, None, &failure).await;
             }
         }
+        if label == TURN_CONTROL_LABEL {
+            return self.control_between_turns(&handoff, envelope, &run, seq).await;
+        }
         if let Some(input) = declared {
-            return self.begin_turn(&handoff, envelope, &pinned, &run, seq, label, &input, reply_to).await;
+            return self.begin_turn(&handoff, envelope, &pinned, &run, seq, label, &input, reply_to, cut).await;
         }
         let payload: Value = match envelope
             .read_artifact_payload()
@@ -197,7 +272,7 @@ impl Provider {
             }
         };
         match crate::tools::decode_tool_result(&payload) {
-            Ok(Some(result)) => self.continue_after_result(&handoff, seq, label, result).await,
+            Ok(Some(result)) => self.continue_after_result(&handoff, envelope, &pinned, &run, seq, label, result).await,
             Ok(None) => {
                 let failure = TurnFailure::new("input_not_supported", format!("this provider does not accept '{label}' artifacts"));
                 self.hand_failure(&handoff, None, None, &failure).await
@@ -235,6 +310,57 @@ impl Provider {
         Ok(())
     }
 
+    /// A turn control that reaches the main reader finds no Claude turn
+    /// running: either the run is waiting for an Octopus tool result, which
+    /// the control abandons, or there is nothing left to interrupt.
+    async fn control_between_turns(&mut self, handoff: &ProviderOutputHandoff, envelope: &InterfaceInvocationEnvelope, run: &str, seq: u64) -> Result<(), String> {
+        let payload: Value = match envelope
+            .read_artifact_payload()
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
+        {
+            Ok(payload) => payload,
+            Err(error) => return self.hand_failure(handoff, None, None, &TurnFailure::new("input_unreadable", error)).await,
+        };
+        let control = match TurnControl::decode(&payload) {
+            Ok(control) => control,
+            Err(error) => return self.hand_failure(handoff, None, None, &TurnFailure::new("turn_control_malformed", error)).await,
+        };
+        let waiting = self.pending_calls.iter().find(|(_, call)| call.run == run).map(|(id, _)| id.clone());
+        let (acknowledged, thread_id, turn_id, detail, live) = match (&control, waiting) {
+            (control, Some(call_id)) if control.interrupts() => {
+                let pending = self.pending_calls.remove(&call_id).expect("found above");
+                if !pending.recovered {
+                    let _ = self.answer_refused_call(&pending.session, &pending.turn, &call_id).await;
+                }
+                let thread_id = pending.live.thread_id().map(str::to_owned);
+                self.interrupted_calls.insert(call_id, InterruptedCall { thread_id: thread_id.clone(), turn: pending.turn.clone() });
+                self.journal.record_inflight(run, None)?;
+                (true, thread_id, Some(pending.turn), json!({"interrupted": true, "exact_result_pending": true}), Some(pending.live))
+            }
+            (control, None) if control.interrupts() => {
+                (true, None, None, json!({"already_terminal": true, "external_effect_dispatched": false}), None)
+            }
+            (control, _) => (
+                false,
+                None,
+                None,
+                json!({"error": format!("the '{}' control is not supported by this provider", control.action())}),
+                None,
+            ),
+        };
+        let result = ControlResult {
+            control_id: control.control_id(),
+            action: control.action(),
+            acknowledged,
+            source_movement_seq: seq,
+            thread_id: thread_id.as_deref(),
+            turn_id: turn_id.as_deref(),
+            detail,
+        };
+        self.hand_terminal(handoff, result.label(), None, live, result.payload()).await
+    }
+
     async fn begin_turn(
         &mut self,
         handoff: &ProviderOutputHandoff,
@@ -245,11 +371,18 @@ impl Provider {
         label: &str,
         input: &crate::config::InputMessage,
         reply_to: Option<&Value>,
+        cut: bool,
     ) -> Result<(), String> {
-        let resume = self.journal.session(run).map(|entry| entry.claude_session_id.clone());
+        let resume = self.journal.claude_session_id(run);
         let history = handoff.current_session_context_artifacts().await;
         let selection = self.config.instruction_selection()?;
-        let context = match crate::context::assemble(envelope, pinned, label, input, &selection, &history, resume.is_none()) {
+        let recovering = cut && resume.is_some();
+        let context = if recovering {
+            crate::context::assemble_with_text(envelope, pinned, &selection, &history, false, CUT_TURN_NOTE)
+        } else {
+            crate::context::assemble(envelope, pinned, label, input, &selection, &history, resume.is_none())
+        };
+        let context = match context {
             Ok(context) => context,
             Err(error) => return self.hand_failure(handoff, reply_to, None, &TurnFailure::new("context_unavailable", error)).await,
         };
@@ -258,18 +391,53 @@ impl Provider {
             Err(error) => return self.hand_failure(handoff, reply_to, None, &TurnFailure::new("tool_catalog_invalid", error)).await,
         };
         let session = session_name(run);
-        let turn = format!("source-{seq}");
-        let mut live = LiveTurn::new(self.streams_root.clone(), &self.provider_interface, run, &session, &turn, seq);
-        let outcome = match self.start_turn(&session, &turn, resume, context, catalog).await {
-            Ok(()) => self.drain(&session, &turn, &mut live).await,
+        let turn = if recovering { format!("source-{seq}-recovered") } else { format!("source-{seq}") };
+        let mut live = LiveTurn::new(self.streams_root.clone(), &self.provider_interface, run, resume.as_deref(), &turn, seq);
+        self.journal.record_inflight(run, Some(InflightTurn { source_seq: seq, turn: turn.clone(), reply_to: reply_to.cloned(), pending_call: None }))?;
+        let waiting = self.pending_calls.iter().find(|(_, call)| call.run == run && !call.recovered).map(|(id, _)| id.clone());
+        let started = match waiting {
+            Some(call_id) => self.redirect_waiting_turn(&call_id, &turn, &context, label, envelope).await,
+            None => self.start_turn(&session, &turn, resume, context, catalog).await,
+        };
+        let outcome = match started {
+            Ok(()) => self.drain(handoff, run, seq, &session, &turn, &mut live).await,
             Err(failure) => Err(failure),
         };
-        self.finish(handoff, reply_to, run, &session, &turn, live, outcome).await
+        self.finish(handoff, reply_to, run, seq, &session, &turn, live, outcome).await
+    }
+
+    /// A new message for a run whose Claude turn is waiting on an Octopus
+    /// tool redirects that turn: the waiting call is abandoned, its result
+    /// closed as recorded when it arrives, and the message runs as the next
+    /// Claude turn in the same session.
+    async fn redirect_waiting_turn(
+        &mut self,
+        call_id: &str,
+        turn: &str,
+        context: &crate::context::TurnContext,
+        label: &str,
+        envelope: &InterfaceInvocationEnvelope,
+    ) -> Result<(), TurnFailure> {
+        let pending = self.pending_calls.remove(call_id).expect("found by caller");
+        let _ = pending.live.abandon();
+        self.interrupted_calls.insert(
+            call_id.to_string(),
+            InterruptedCall { thread_id: self.journal.claude_session_id(&pending.run), turn: pending.turn.clone() },
+        );
+        let control_id = steer_control_id(label, envelope, &self.config);
+        self.steer_receipts.entry(turn.to_string()).or_default().push((context.prompt.clone(), control_id));
+        self.child_mut()?
+            .steer(&pending.session, &pending.turn, Some(turn), vec![TextInput::new(context.prompt.clone())])
+            .await
+            .map_err(|error| TurnFailure::new(&error.code, error.message))
     }
 
     async fn continue_after_result(
         &mut self,
         handoff: &ProviderOutputHandoff,
+        envelope: &InterfaceInvocationEnvelope,
+        pinned: &[u8],
+        run: &str,
         seq: u64,
         label: &str,
         result: octopus_tool_handlers::ToolResultArtifact,
@@ -277,35 +445,83 @@ impl Provider {
         let Some(call_id) = result.correlation_id.clone() else {
             return self.hand_failure(handoff, None, None, &TurnFailure::new("tool_result_uncorrelated", "the tool result carries no correlation_id")).await;
         };
-        let Some(mut pending) = self.pending_calls.remove(&call_id) else {
-            let failure = TurnFailure::new(
-                "tool_result_not_pending",
-                format!("tool result for call '{call_id}' arrived, but this provider holds no open Claude turn for it; the model call was not replayed"),
-            );
-            return self.hand_failure(handoff, None, None, &failure).await;
+        if let Some(interrupted) = self.interrupted_calls.remove(&call_id) {
+            let source = serde_json::to_value(&envelope.artifact).map_err(|error| error.to_string())?;
+            let payload = interrupted_result_payload(&result, &source, interrupted.thread_id.as_deref(), &interrupted.turn);
+            return self.hand_terminal(handoff, crate::controls::INTERRUPTED_RESULT_LABEL, None, None, payload).await;
+        }
+        let cut_after_result = self.journal.inflight(run).filter(|inflight| inflight.source_seq == seq && inflight.pending_call.is_none()).cloned();
+        let mut pending = match (self.pending_calls.remove(&call_id), cut_after_result) {
+            (Some(pending), _) => pending,
+            (None, Some(inflight)) => {
+                let turn = format!("{}-recovered", inflight.turn);
+                let live = LiveTurn::new(self.streams_root.clone(), &self.provider_interface, run, self.journal.claude_session_id(run).as_deref(), &turn, seq);
+                PendingCall { reply_to: inflight.reply_to, run: run.to_string(), session: session_name(run), turn, tool: result.tool.clone(), live, recovered: true }
+            }
+            (None, None) => {
+                let failure = TurnFailure::new(
+                    "tool_result_not_pending",
+                    format!("tool result for call '{call_id}' arrived, but this provider holds no open Claude turn for it; the model call was not replayed"),
+                );
+                return self.hand_failure(handoff, None, None, &failure).await;
+            }
         };
         if result.tool != pending.tool || result.label != label {
             let failure = TurnFailure::new(
                 "tool_result_mismatch",
                 format!("call '{call_id}' was for tool '{}', the result names tool '{}' with label '{}'", pending.tool, result.tool, result.label),
             );
-            let _ = self.answer_refused_call(&pending.session, &pending.turn, &call_id).await;
+            if !pending.recovered {
+                let _ = self.answer_refused_call(&pending.session, &pending.turn, &call_id).await;
+            }
             return self.hand_failure(handoff, pending.reply_to.as_ref(), Some(pending.live), &failure).await;
         }
+        let run = pending.run.clone();
+        self.journal.record_inflight(&run, Some(InflightTurn { source_seq: seq, turn: pending.turn.clone(), reply_to: pending.reply_to.clone(), pending_call: None }))?;
         let text = crate::tools::model_result_text(&result);
-        let answered = match self.child_mut() {
-            Ok(child) => child
-                .tool_result(&pending.session, &pending.turn, &call_id, vec![TextInput::new(text)], !result.ok)
-                .await
-                .map_err(|error| TurnFailure::new(&error.code, error.message)),
-            Err(failure) => Err(failure),
+        let answered = if pending.recovered {
+            self.resume_with_result(handoff, envelope, pinned, &pending, &call_id, &text).await
+        } else {
+            match self.child_mut() {
+                Ok(child) => child
+                    .tool_result(&pending.session, &pending.turn, &call_id, vec![TextInput::new(text)], !result.ok)
+                    .await
+                    .map_err(|error| TurnFailure::new(&error.code, error.message)),
+                Err(failure) => Err(failure),
+            }
         };
         pending.live.source_movement_seq = seq;
         let outcome = match answered {
-            Ok(()) => self.drain(&pending.session, &pending.turn, &mut pending.live).await,
+            Ok(()) => self.drain(handoff, &run, seq, &pending.session, &pending.turn, &mut pending.live).await,
             Err(failure) => Err(failure),
         };
-        self.finish(handoff, pending.reply_to.as_ref(), &pending.run, &pending.session, &pending.turn, pending.live, outcome).await
+        self.finish(handoff, pending.reply_to.as_ref(), &run, seq, &pending.session, &pending.turn, pending.live, outcome).await
+    }
+
+    /// The Claude turn that made this call died with the previous life. Its
+    /// session is resumed and the result reaches Claude as a message, since
+    /// no call is open for it any more.
+    async fn resume_with_result(
+        &mut self,
+        handoff: &ProviderOutputHandoff,
+        envelope: &InterfaceInvocationEnvelope,
+        pinned: &[u8],
+        pending: &PendingCall,
+        call_id: &str,
+        result_text: &str,
+    ) -> Result<(), TurnFailure> {
+        let resume = self.journal.claude_session_id(&pending.run);
+        let selection = self.config.instruction_selection().map_err(|error| TurnFailure::new("context_unavailable", error))?;
+        let history = handoff.current_session_context_artifacts().await;
+        let carried = format!(
+            "The provider restarted while your call to the tool `{}` (correlation {call_id}) was running, so that call is no longer open. Octopus completed it; its result follows. Continue from this result.\n\n{result_text}",
+            crate::tools::encode_tool_name(&pending.tool).unwrap_or_else(|_| pending.tool.clone()),
+        );
+        let context = crate::context::assemble_with_text(envelope, pinned, &selection, &history, resume.is_none(), &carried)
+            .map_err(|error| TurnFailure::new("context_unavailable", error))?;
+        let catalog = crate::tools::admitted_catalog(handoff, envelope, &self.config.model_hidden_tools)
+            .map_err(|error| TurnFailure::new("tool_catalog_invalid", error))?;
+        self.start_turn(&pending.session, &pending.turn, resume, context, catalog).await
     }
 
     async fn finish(
@@ -313,42 +529,76 @@ impl Provider {
         handoff: &ProviderOutputHandoff,
         reply_to: Option<&Value>,
         run: &str,
+        seq: u64,
         session: &str,
         turn: &str,
         mut live: LiveTurn,
         outcome: Result<TurnOutcome, TurnFailure>,
     ) -> Result<(), String> {
+        self.steer_receipts.remove(turn);
+        self.interrupting.remove(turn);
         match outcome {
             Ok(TurnOutcome::Reply(reply)) => {
                 if let Some(claude) = &reply.claude_session_id {
                     self.journal.record_session(run, claude)?;
                 }
-                self.hand_reply(handoff, reply_to, live, turn, reply).await
+                self.journal.record_inflight(run, None)?;
+                self.hand_reply(handoff, reply_to, live, turn, reply, "completed").await
+            }
+            Ok(TurnOutcome::Interrupted { text, claude_session_id }) => {
+                if let Some(claude) = &claude_session_id {
+                    self.journal.record_session(run, claude)?;
+                }
+                self.journal.record_inflight(run, None)?;
+                let reply = TurnReply { text, claude_session_id, usage: None };
+                self.hand_reply(handoff, reply_to, live, turn, reply, "interrupted").await
             }
             Ok(TurnOutcome::ToolCall { call_id, tool, arguments, claude_session_id }) => {
                 if let Some(claude) = &claude_session_id {
                     self.journal.record_session(run, claude)?;
                 }
+                self.journal.record_inflight(
+                    run,
+                    Some(InflightTurn {
+                        source_seq: seq,
+                        turn: turn.to_string(),
+                        reply_to: reply_to.cloned(),
+                        pending_call: Some(PendingCallRecord { call_id: call_id.clone(), tool: tool.clone() }),
+                    }),
+                )?;
                 match self.hand_tool_call(handoff, &tool, &arguments, &call_id, &mut live).await {
                     Ok(true) => {
                         self.pending_calls.insert(
                             call_id,
-                            PendingCall { reply_to: reply_to.cloned(), run: run.to_string(), session: session.to_string(), turn: turn.to_string(), tool, live },
+                            PendingCall {
+                                reply_to: reply_to.cloned(),
+                                run: run.to_string(),
+                                session: session.to_string(),
+                                turn: turn.to_string(),
+                                tool,
+                                live,
+                                recovered: false,
+                            },
                         );
                         Ok(())
                     }
                     Ok(false) => {
+                        self.journal.record_inflight(run, None)?;
                         let _ = self.answer_refused_call(session, turn, &call_id).await;
                         live.abandon()
                     }
                     Err(error) => {
+                        self.journal.record_inflight(run, None)?;
                         let _ = self.answer_refused_call(session, turn, &call_id).await;
                         let _ = live.abandon();
                         Err(error)
                     }
                 }
             }
-            Err(failure) => self.hand_failure(handoff, reply_to, Some(live), &failure).await,
+            Err(failure) => {
+                self.journal.record_inflight(run, None)?;
+                self.hand_failure(handoff, reply_to, Some(live), &failure).await
+            }
         }
     }
 
@@ -405,29 +655,62 @@ impl Provider {
             .map_err(|error| TurnFailure::new(&error.code, error.message))
     }
 
-    async fn drain(&mut self, session: &str, turn: &str, live: &mut LiveTurn) -> Result<TurnOutcome, TurnFailure> {
+    async fn drain(
+        &mut self,
+        handoff: &ProviderOutputHandoff,
+        run: &str,
+        source_seq: u64,
+        session: &str,
+        turn: &str,
+        live: &mut LiveTurn,
+    ) -> Result<TurnOutcome, TurnFailure> {
         let mut text = Vec::new();
         let mut usage = None;
         let mut failure: Option<TurnFailure> = None;
-        let mut claude_session_id = None;
+        let mut claude_session_id = live.thread_id().map(str::to_owned);
+        let mut interrupted = false;
         let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
         let stream_failed = |error: String| TurnFailure::new("turn_stream_failed", error);
         loop {
             let wake = live.flush_due().map_or(deadline, |due| due.min(deadline));
-            let event = match tokio::time::timeout_at(wake, self.child_mut()?.next_event()).await {
-                Ok(Some(event)) => event,
-                Ok(None) => return Err(self.child_lost("the SDK child closed its event stream")),
-                Err(_) if wake < deadline => {
+            let cancel = self.ctx.cancel.clone();
+            let drained = {
+                let child = self.child.as_mut().ok_or_else(|| TurnFailure::new("child_unavailable", "the SDK child is not running"))?;
+                let controls = &mut self.controls;
+                tokio::select! {
+                    event = child.next_event() => Drained::Event(event),
+                    changed = controls.wait_for_change(&cancel) => {
+                        changed.map_err(|error| TurnFailure::new("control_reader_failed", error))?;
+                        Drained::Controls
+                    }
+                    _ = tokio::time::sleep_until(wake) => Drained::Wake,
+                }
+            };
+            let event = match drained {
+                Drained::Event(Some(event)) => event,
+                Drained::Event(None) => return Err(self.child_lost("the SDK child closed its event stream")),
+                Drained::Controls => {
+                    if let Err(error) = self.poll_controls(handoff, run, source_seq, session, turn, live).await {
+                        let _ = self.child_mut()?.interrupt(session, turn).await;
+                        return Err(TurnFailure::new("control_handling_failed", error));
+                    }
+                    continue;
+                }
+                Drained::Wake if wake < deadline => {
                     live.flush().map_err(stream_failed)?;
                     continue;
                 }
-                Err(_) => {
+                Drained::Wake => {
                     let _ = self.child_mut()?.interrupt(session, turn).await;
                     return Err(TurnFailure::new("turn_timeout", "the Claude turn exceeded its time limit and was interrupted"));
                 }
             };
             match event {
-                Event::Session { session: name, claude_session_id: id, .. } if name == session => claude_session_id = Some(id),
+                Event::Session { session: name, claude_session_id: id, .. } if name == session => {
+                    live.set_thread_id(&id).map_err(stream_failed)?;
+                    self.journal.record_session(run, &id).map_err(|error| TurnFailure::new("journal_failed", error))?;
+                    claude_session_id = Some(id);
+                }
                 Event::Item { session: name, turn: t, item } if name == session && t == turn => {
                     if item.kind == ItemKind::Text {
                         text.push(item.text);
@@ -437,6 +720,14 @@ impl Provider {
                     if let Err(error) = live.delta(&message_id, &text) {
                         let _ = self.child_mut()?.interrupt(session, turn).await;
                         return Err(stream_failed(error));
+                    }
+                }
+                Event::InputRecorded { session: name, turn: t, text: recorded, .. } if name == session && t == turn => {
+                    let receipts = self.steer_receipts.entry(turn.to_string()).or_default();
+                    if let Some(index) = receipts.iter().position(|(steer, _)| steer == &recorded) {
+                        let (_, control_id) = receipts.remove(index);
+                        text.clear();
+                        live.input_recorded(&control_id, &format!("steer-{control_id}")).map_err(stream_failed)?;
                     }
                 }
                 Event::ToolCall { session: name, turn: t, call_id, name: model_name, input } if name == session && t == turn => {
@@ -470,6 +761,9 @@ impl Provider {
                                 Ok(TurnOutcome::Reply(TurnReply { text, claude_session_id, usage }))
                             }
                         }
+                        TurnStatus::Interrupted if interrupted => {
+                            Ok(TurnOutcome::Interrupted { text: live.streamed_text().unwrap_or_else(|| text.join("\n\n")), claude_session_id })
+                        }
                         TurnStatus::Interrupted => Err(TurnFailure::new("turn_interrupted", "the Claude turn was interrupted")),
                         TurnStatus::Failed => {
                             self.open_sessions.remove(session);
@@ -479,6 +773,139 @@ impl Provider {
                 }
                 _ => {}
             }
+            if !interrupted && self.turn_interrupted(turn) {
+                interrupted = true;
+            }
+        }
+    }
+
+    fn turn_interrupted(&self, turn: &str) -> bool {
+        self.interrupting.contains(turn)
+    }
+
+    /// Reads the movements that arrived while this turn runs and answers the
+    /// ones that control it: an `operator.turn.control` interrupts Claude, a
+    /// new declared input for the same run redirects it. Each is answered on
+    /// the running turn's handoff and journaled, so the main reader does not
+    /// start it as a turn of its own.
+    async fn poll_controls(
+        &mut self,
+        handoff: &ProviderOutputHandoff,
+        run: &str,
+        source_seq: u64,
+        session: &str,
+        turn: &str,
+        live: &mut LiveTurn,
+    ) -> Result<(), String> {
+        loop {
+            let batch = self.controls.read_new_uncommitted_limit(CONTROL_BATCH)?;
+            if batch.is_empty() {
+                return Ok(());
+            }
+            for own in batch {
+                let seq = own.movement.seq.0;
+                if seq <= source_seq || self.journal.control_handled(seq) {
+                    continue;
+                }
+                let Ok(envelope) = self.controls.envelope(&own) else { continue };
+                let Ok(runtime) = envelope.runtime() else { continue };
+                if runtime.run.as_str() != run {
+                    continue;
+                }
+                let Ok(manifest) = envelope.read_artifact_manifest() else { continue };
+                let label = manifest.label.clone();
+                let is_control = label == TURN_CONTROL_LABEL;
+                let is_steer = self.config.input_messages.contains_key(&label);
+                if !is_control && !is_steer {
+                    continue;
+                }
+                let payload: Value = serde_json::from_slice(&envelope.read_artifact_payload().map_err(|error| error.to_string())?)
+                    .map_err(|error| format!("control artifact is not JSON: {error}"))?;
+                let thread_id = live.thread_id().map(str::to_owned);
+                let result = if is_control {
+                    self.interrupt_running_turn(&payload, seq, session, turn, thread_id.as_deref()).await
+                } else {
+                    self.steer_running_turn(&label, &payload, &envelope, seq, session, turn, thread_id.as_deref()).await
+                };
+                let (acknowledged, control_id, action, detail) = result?;
+                let control = ControlResult {
+                    control_id: &control_id,
+                    action,
+                    acknowledged,
+                    source_movement_seq: seq,
+                    thread_id: thread_id.as_deref(),
+                    turn_id: Some(turn),
+                    detail,
+                };
+                let bytes = serde_json::to_vec(&control.payload()).map_err(|error| error.to_string())?;
+                let artifact = InterfaceArtifactFile::write(self.ctx.var_dir.join("emitted"), control.label(), &bytes).map_err(|error| error.to_string())?;
+                live.boundary(control.label(), &artifact)?;
+                handoff
+                    .hand_from_input(ProviderEmission { artifact, route: ProviderEmissionRoute::ClientProjection }, false, seq, acknowledged)
+                    .await?;
+                self.journal.record_handled_control(seq)?;
+                self.controls.commit_through(&own)?;
+            }
+        }
+    }
+
+    async fn interrupt_running_turn(
+        &mut self,
+        payload: &Value,
+        seq: u64,
+        session: &str,
+        turn: &str,
+        _thread_id: Option<&str>,
+    ) -> Result<(bool, String, &'static str, Value), String> {
+        let control = match TurnControl::decode(payload) {
+            Ok(control) => control,
+            Err(error) => return Ok((false, format!("movement-{seq}"), "decode", json!({"error": error}))),
+        };
+        if !control.interrupts() {
+            let detail = json!({"error": format!("the '{}' control is not supported while a turn is running", control.action())});
+            return Ok((false, control.control_id().to_string(), control.action(), detail));
+        }
+        match self.child_mut().map_err(|failure| failure.message) {
+            Ok(child) => match child.interrupt(session, turn).await {
+                Ok(()) => {
+                    self.interrupting.insert(turn.to_string());
+                    Ok((true, control.control_id().to_string(), control.action(), json!({"interrupted": true, "exact_result_pending": false})))
+                }
+                Err(error) => Ok((false, control.control_id().to_string(), control.action(), json!({"error": error.to_string()}))),
+            },
+            Err(error) => Ok((false, control.control_id().to_string(), control.action(), json!({"error": error}))),
+        }
+    }
+
+    async fn steer_running_turn(
+        &mut self,
+        label: &str,
+        payload: &Value,
+        envelope: &InterfaceInvocationEnvelope,
+        _seq: u64,
+        session: &str,
+        turn: &str,
+        _thread_id: Option<&str>,
+    ) -> Result<(bool, String, &'static str, Value), String> {
+        let control_id = steer_control_id(label, envelope, &self.config);
+        let contract = self.config.input_messages.get(label).cloned().expect("declared by caller");
+        let text = match crate::input::decode(label, &contract, payload) {
+            Ok(decoded) => decoded.prompt_text(),
+            Err(error) => return Ok((false, control_id, "steer", json!({"error": error}))),
+        };
+        if self.turn_interrupted(turn) {
+            return Ok((false, control_id, "steer", json!({"error": "the turn is being interrupted"})));
+        }
+        let steered = match self.child_mut().map_err(|failure| failure.message) {
+            Ok(child) => child.steer(session, turn, None, vec![TextInput::new(text.clone())]).await.map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        };
+        match steered {
+            Ok(()) => {
+                self.steer_receipts.entry(turn.to_string()).or_default().push((text, control_id.clone()));
+                Ok((true, control_id, "steer", json!({"stage": "accepted_by_provider", "consumption_proven": false})))
+            }
+            Err(error) => Ok((false, control_id, "steer", json!({"error": error}))),
         }
     }
 
@@ -523,7 +950,15 @@ impl Provider {
         TurnFailure::new("child_exited", message)
     }
 
-    async fn hand_reply(&self, handoff: &ProviderOutputHandoff, reply_to: Option<&Value>, live: LiveTurn, turn: &str, reply: TurnReply) -> Result<(), String> {
+    async fn hand_reply(
+        &mut self,
+        handoff: &ProviderOutputHandoff,
+        reply_to: Option<&Value>,
+        live: LiveTurn,
+        turn: &str,
+        reply: TurnReply,
+        lifecycle: &str,
+    ) -> Result<(), String> {
         let item_id = live.reply_item_id(&reply.text).unwrap_or_else(|| format!("msg_{turn}"));
         let mut value = json!({
             "thread_id": reply.claude_session_id,
@@ -531,7 +966,7 @@ impl Provider {
             "item_id": item_id,
             "text": reply.text,
             "phase": "final_answer",
-            "lifecycle": "completed",
+            "lifecycle": lifecycle,
         });
         if let Some(usage) = reply.usage {
             value["provider_token_usage"] = json!({
@@ -544,7 +979,7 @@ impl Provider {
         self.hand_terminal(handoff, REPLY_LABEL, reply_to, Some(live), value).await
     }
 
-    async fn hand_tool_call(&self, handoff: &ProviderOutputHandoff, tool: &str, arguments: &Value, call_id: &str, live: &mut LiveTurn) -> Result<bool, String> {
+    async fn hand_tool_call(&mut self, handoff: &ProviderOutputHandoff, tool: &str, arguments: &Value, call_id: &str, live: &mut LiveTurn) -> Result<bool, String> {
         let value = json!({"tool": tool, "arguments": arguments, "correlation_id": call_id});
         let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
         let artifact = InterfaceArtifactFile::write(self.ctx.var_dir.join("emitted"), TOOL_CALL_LABEL, &bytes).map_err(|error| error.to_string())?;
@@ -552,10 +987,10 @@ impl Provider {
         let outcome = handoff
             .hand_final(ProviderEmission { artifact, route: ProviderEmissionRoute::Tool { tool: tool.to_string() } })
             .await?;
-        Ok(matches!(outcome, octopus_run_authoring::ProviderHandoffOutcome::Admitted { .. }))
+        Ok(matches!(outcome, ProviderHandoffOutcome::Admitted { .. }))
     }
 
-    async fn hand_failure(&self, handoff: &ProviderOutputHandoff, reply_to: Option<&Value>, live: Option<LiveTurn>, failure: &TurnFailure) -> Result<(), String> {
+    async fn hand_failure(&mut self, handoff: &ProviderOutputHandoff, reply_to: Option<&Value>, live: Option<LiveTurn>, failure: &TurnFailure) -> Result<(), String> {
         let mut value = json!({
             "message": failure.message,
             "will_retry": false,
@@ -575,7 +1010,7 @@ impl Provider {
     /// streamed hands its sealed `turn.stream` first, as Codex hands its
     /// terminal group.
     async fn hand_terminal(
-        &self,
+        &mut self,
         handoff: &ProviderOutputHandoff,
         label: &str,
         reply_to: Option<&Value>,
@@ -591,7 +1026,7 @@ impl Provider {
             let outcomes = handoff
                 .hand_progress_batch(vec![ProviderEmission { artifact: stream, route: ProviderEmissionRoute::ClientProjection }])
                 .await?;
-            if !outcomes.iter().all(|outcome| matches!(outcome, octopus_run_authoring::ProviderHandoffOutcome::Admitted { .. })) {
+            if !outcomes.iter().all(|outcome| matches!(outcome, ProviderHandoffOutcome::Admitted { .. })) {
                 return Ok(());
             }
         }
@@ -606,6 +1041,17 @@ impl Provider {
             let _ = child.shutdown().await;
         }
     }
+}
+
+/// The id the client gave a steering message, which its acknowledgement and
+/// its recorded-input row must repeat; the artifact id when it gave none.
+fn steer_control_id(label: &str, envelope: &InterfaceInvocationEnvelope, config: &ClaudeNativeConfig) -> String {
+    let identity = config.input_messages.get(label).and_then(|contract| contract.identity_field.clone());
+    let from_payload = identity.and_then(|field| {
+        let payload: Value = serde_json::from_slice(&envelope.read_artifact_payload().ok()?).ok()?;
+        payload.get(&field)?.as_str().map(str::to_owned)
+    });
+    from_payload.unwrap_or_else(|| envelope.artifact.id.as_str().to_string())
 }
 
 fn session_name(run: &str) -> String {

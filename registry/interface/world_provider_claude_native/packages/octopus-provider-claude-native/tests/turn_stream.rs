@@ -28,7 +28,7 @@ fn a_turn_streams_its_text_and_seals_at_its_terminal() {
     let temp = tempfile::tempdir().unwrap();
     let streams = temp.path().join("streams");
     let emitted = temp.path().join("emitted");
-    let mut live = LiveTurn::new(streams.clone(), PROVIDER, RUN, "run-thread", "source-7", 7);
+    let mut live = LiveTurn::new(streams.clone(), PROVIDER, RUN, Some("run-thread"), "source-7", 7);
     live.delta("msg_a", "Let me ").unwrap();
     live.delta("msg_a", "check.").unwrap();
     assert!(live.flush_due().is_some(), "deltas inside the window wait to be coalesced");
@@ -76,13 +76,13 @@ fn a_turn_without_text_has_no_stream_and_a_stale_open_stream_is_withdrawn() {
     let temp = tempfile::tempdir().unwrap();
     let streams = temp.path().join("streams");
     let terminal = InterfaceArtifactFile::write(temp.path().join("emitted"), "turn.error", br#"{"message":"x"}"#).unwrap();
-    let quiet = LiveTurn::new(streams.clone(), PROVIDER, RUN, "run-thread", "source-1", 1);
+    let quiet = LiveTurn::new(streams.clone(), PROVIDER, RUN, Some("run-thread"), "source-1", 1);
     assert!(quiet.seal("turn.error", &terminal).unwrap().is_none());
 
-    let mut sealed = LiveTurn::new(streams.clone(), PROVIDER, RUN, "run-thread", "source-2", 2);
+    let mut sealed = LiveTurn::new(streams.clone(), PROVIDER, RUN, Some("run-thread"), "source-2", 2);
     sealed.delta("msg_a", "done").unwrap();
     sealed.seal("turn.error", &terminal).unwrap().unwrap();
-    let mut stale = LiveTurn::new(streams.clone(), PROVIDER, RUN, "run-thread", "source-3", 3);
+    let mut stale = LiveTurn::new(streams.clone(), PROVIDER, RUN, Some("run-thread"), "source-3", 3);
     stale.delta("msg_b", "interrupted").unwrap();
     stale.flush().unwrap();
     drop(stale);
@@ -93,4 +93,33 @@ fn a_turn_without_text_has_no_stream_and_a_stale_open_stream_is_withdrawn() {
     assert!(stale_dir.join("turn-stream.body.jsonl").exists(), "its body is kept");
     assert!(turn_dir(&streams, "run-thread", "source-2").join("turn-stream.artifact.json").exists());
     assert_eq!(retire_open_streams(&streams).unwrap(), 0);
+}
+
+#[test]
+fn a_steer_is_recorded_in_the_stream_under_the_claude_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let streams = temp.path().join("streams");
+    let mut live = LiveTurn::new(streams.clone(), PROVIDER, RUN, None, "source-9", 9);
+    assert!(live.delta("msg_a", "x").is_ok(), "deltas wait in memory until the session is known");
+    assert!(live.flush().unwrap_err().contains("before Claude reports its session"));
+    live.set_thread_id("claude-1").unwrap();
+    live.flush().unwrap();
+    live.input_recorded("msg_steer_1", "steer-msg_steer_1").unwrap();
+    assert!(live.set_thread_id("claude-2").is_err(), "an open stream keeps its thread");
+    let rows = rows(&turn_dir(&streams, "claude-1", "source-9"));
+    let recorded = rows.iter().find(|row| row["type"] == "input_recorded").expect("recorded row");
+    for (field, expected) in [
+        ("provider_interface", PROVIDER),
+        ("run", RUN),
+        ("thread_id", "claude-1"),
+        ("turn_id", "source-9"),
+        ("client_id", "msg_steer_1"),
+        ("item_id", "steer-msg_steer_1"),
+        ("stage", "input_recorded_in_turn"),
+        ("source_event", "item/started"),
+    ] {
+        assert_eq!(recorded[field], expected, "{field}");
+    }
+    assert!(recorded["native_event_at_ms"].as_u64().is_some());
+    assert_eq!(live.streamed_text().as_deref(), Some("x"));
 }

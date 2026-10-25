@@ -54,6 +54,7 @@ impl TextInput {
 enum Command_ {
     Start { request_id: u64, session: String, config: SessionConfig },
     Turn { request_id: u64, session: String, turn: String, input: Vec<TextInput> },
+    Steer { request_id: u64, session: String, turn: String, as_turn: Option<String>, input: Vec<TextInput> },
     Interrupt { request_id: u64, session: String, turn: String },
     ToolResult { request_id: u64, session: String, turn: String, call_id: String, content: Vec<TextInput>, is_error: bool },
     Close { request_id: u64, session: String },
@@ -99,6 +100,7 @@ pub enum Event {
     Session { session: String, claude_session_id: String, model: String, tools: Vec<String> },
     Item { session: String, turn: String, item: Item },
     TextDelta { session: String, turn: String, message_id: String, text: String },
+    InputRecorded { session: String, turn: String, text: String, synthetic: bool },
     ToolCall { session: String, turn: String, call_id: String, name: String, input: serde_json::Map<String, Value> },
     Usage { session: String, turn: String, usage: Usage, total_cost_usd: serde_json::Number, duration_ms: serde_json::Number, num_turns: u64 },
     TurnEnd { session: String, turn: String, status: TurnStatus, result: Option<String>, claude_session_id: Option<String> },
@@ -186,6 +188,18 @@ impl SdkChild {
     pub async fn turn(&mut self, session: &str, turn: &str, input: Vec<TextInput>) -> Result<(), ChildError> {
         let request_id = self.request_id();
         self.request(request_id, Command_::Turn { request_id, session: session.into(), turn: turn.into(), input }).await
+    }
+
+    /// Redirects the running turn `turn`: the child interrupts Claude and
+    /// starts the steer text as a new Claude turn in the same session,
+    /// reported under `as_turn` when given, else under `turn`.
+    pub async fn steer(&mut self, session: &str, turn: &str, as_turn: Option<&str>, input: Vec<TextInput>) -> Result<(), ChildError> {
+        let request_id = self.request_id();
+        self.request(
+            request_id,
+            Command_::Steer { request_id, session: session.into(), turn: turn.into(), as_turn: as_turn.map(str::to_owned), input },
+        )
+        .await
     }
 
     pub async fn interrupt(&mut self, session: &str, turn: &str) -> Result<(), ChildError> {

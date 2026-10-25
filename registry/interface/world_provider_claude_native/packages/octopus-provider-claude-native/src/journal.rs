@@ -6,11 +6,38 @@ use serde::{Deserialize, Serialize};
 
 const JOURNAL_FILE: &str = "claude-native-journal.json";
 const JOURNAL_VERSION: u32 = 1;
+const HANDLED_CONTROLS_KEPT: usize = 512;
 
+/// What this life remembers about one run between turns and across restarts:
+/// the Claude session that continues the run's conversation, and the turn
+/// that was in flight when the life last wrote, so a restart can resume it.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RunSession {
-    pub claude_session_id: String,
+    #[serde(default)]
+    pub claude_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inflight: Option<InflightTurn>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InflightTurn {
+    pub source_seq: u64,
+    pub turn: String,
+    /// The admitted input the turn answers, kept so a reply handed after a
+    /// restart still names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_call: Option<PendingCallRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PendingCallRecord {
+    pub call_id: String,
+    pub tool: String,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -18,6 +45,10 @@ pub struct RunSession {
 struct JournalState {
     version: u32,
     runs: BTreeMap<String, RunSession>,
+    /// Ledger movements this life already answered as turn controls while a
+    /// turn was running, so the main reader does not start them as turns.
+    #[serde(default)]
+    handled_controls: Vec<u64>,
 }
 
 pub struct Journal {
@@ -43,22 +74,57 @@ impl Journal {
                 }
                 state
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => JournalState { version: JOURNAL_VERSION, runs: BTreeMap::new() },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                JournalState { version: JOURNAL_VERSION, runs: BTreeMap::new(), handled_controls: Vec::new() }
+            }
             Err(error) => return Err(format!("claude native journal cannot be inspected: {error}")),
         };
         Ok(Self { path, max_bytes, state })
     }
 
-    pub fn session(&self, run: &str) -> Option<&RunSession> {
-        self.state.runs.get(run)
+    pub fn runs(&self) -> impl Iterator<Item = (&String, &RunSession)> {
+        self.state.runs.iter()
+    }
+
+    pub fn claude_session_id(&self, run: &str) -> Option<String> {
+        self.state.runs.get(run).and_then(|entry| entry.claude_session_id.clone())
     }
 
     pub fn record_session(&mut self, run: &str, claude_session_id: &str) -> Result<(), String> {
-        let entry = RunSession { claude_session_id: claude_session_id.to_string() };
-        if self.state.runs.get(run) == Some(&entry) {
+        let entry = self.state.runs.entry(run.to_string()).or_default();
+        if entry.claude_session_id.as_deref() == Some(claude_session_id) {
             return Ok(());
         }
-        self.state.runs.insert(run.to_string(), entry);
+        entry.claude_session_id = Some(claude_session_id.to_string());
+        self.save()
+    }
+
+    pub fn inflight(&self, run: &str) -> Option<&InflightTurn> {
+        self.state.runs.get(run).and_then(|entry| entry.inflight.as_ref())
+    }
+
+    pub fn record_inflight(&mut self, run: &str, inflight: Option<InflightTurn>) -> Result<(), String> {
+        let entry = self.state.runs.entry(run.to_string()).or_default();
+        if entry.inflight == inflight {
+            return Ok(());
+        }
+        entry.inflight = inflight;
+        self.save()
+    }
+
+    pub fn control_handled(&self, seq: u64) -> bool {
+        self.state.handled_controls.contains(&seq)
+    }
+
+    pub fn record_handled_control(&mut self, seq: u64) -> Result<(), String> {
+        if self.control_handled(seq) {
+            return Ok(());
+        }
+        self.state.handled_controls.push(seq);
+        if self.state.handled_controls.len() > HANDLED_CONTROLS_KEPT {
+            let excess = self.state.handled_controls.len() - HANDLED_CONTROLS_KEPT;
+            self.state.handled_controls.drain(..excess);
+        }
         self.save()
     }
 
