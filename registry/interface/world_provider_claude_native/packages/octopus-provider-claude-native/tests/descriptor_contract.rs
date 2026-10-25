@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use octopus_interfaces::InterfaceDescriptor;
-use octopus_provider_claude_native::{ClaudeNativeConfig, verify_sdk_child};
+use octopus_provider_claude_native::{ClaudeNativeConfig, verify_claude_grant, verify_sdk_child};
 use serde_json::{Value, json};
 
 fn declared() -> Value {
@@ -63,4 +63,18 @@ fn the_sdk_child_must_match_its_build_receipt() {
     let digest: String = sha2::Sha256::digest(b"child bytes").iter().map(|byte| format!("{byte:02x}")).collect();
     receipt(&digest);
     verify_sdk_child(&executable).unwrap();
+}
+
+#[test]
+fn the_claude_executable_must_be_granted_by_its_own_life() {
+    let owner = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    verify_claude_grant(&owner, "claude").unwrap();
+    let configured = "/opt/claude-code/bin/claude";
+    assert!(verify_claude_grant(&owner, configured).unwrap_err().contains("authority.executable_paths"));
+    let dir = tempfile::tempdir().unwrap();
+    let mut life: Value = serde_json::from_slice(&std::fs::read(owner.join("life.json")).unwrap()).unwrap();
+    life["processes"][0]["authority"]["executable_paths"] = json!([configured]);
+    std::fs::write(dir.path().join("life.json"), serde_json::to_vec(&life).unwrap()).unwrap();
+    verify_claude_grant(dir.path(), configured).unwrap();
+    assert!(verify_claude_grant(dir.path(), "claude-other").unwrap_err().contains("authority.executable_commands"));
 }

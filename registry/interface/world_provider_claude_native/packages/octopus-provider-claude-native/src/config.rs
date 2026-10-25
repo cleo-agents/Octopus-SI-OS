@@ -161,6 +161,31 @@ fn validate_claude_executable(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn verify_claude_grant(interface_dir: &Path, claude_executable: &str) -> Result<(), String> {
+    let life_path = interface_dir.join("life.json");
+    let life: Value = serde_json::from_slice(
+        &std::fs::read(&life_path).map_err(|error| format!("'{}' is unreadable: {error}", life_path.display()))?,
+    )
+    .map_err(|error| format!("'{}' is malformed: {error}", life_path.display()))?;
+    let authority = life
+        .pointer("/processes/0/authority")
+        .ok_or_else(|| format!("'{}' declares no process authority", life_path.display()))?;
+    let (field, granted) = if Path::new(claude_executable).is_absolute() {
+        ("executable_paths", authority.get("executable_paths"))
+    } else {
+        ("executable_commands", authority.get("executable_commands"))
+    };
+    let granted = granted
+        .and_then(Value::as_array)
+        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(claude_executable)));
+    if !granted {
+        return Err(format!(
+            "sdk_child.claude_executable '{claude_executable}' is not granted by life.json authority.{field}; grant exactly that value there"
+        ));
+    }
+    Ok(())
+}
+
 pub fn validate_identity(value: &str, name: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 256

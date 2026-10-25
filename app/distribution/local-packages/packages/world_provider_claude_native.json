@@ -41,6 +41,33 @@
                   "max"
                 ]
               }
+            },
+            {
+              "pointer": "/interface_driver_config/private_config/sdk_child/claude_executable",
+              "schema": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            }
+          ]
+        },
+        {
+          "path": "life.json",
+          "fields": [
+            {
+              "pointer": "/processes/0/authority/executable_paths",
+              "schema": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^/",
+                  "minLength": 2,
+                  "maxLength": 4096
+                }
+              }
             }
           ]
         }

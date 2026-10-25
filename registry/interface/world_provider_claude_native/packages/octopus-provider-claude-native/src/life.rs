@@ -78,6 +78,7 @@ impl TurnFailure {
 async fn provider_life(ctx: InterfaceLiftContext) -> Result<(), String> {
     let descriptor = ctx.resolved_interface_descriptor()?;
     let config = ClaudeNativeConfig::from_descriptor(&descriptor)?;
+    crate::config::verify_claude_grant(&ctx.interface_dir, &config.sdk_child.claude_executable)?;
     let registry_interface_root = ctx.root_slot("registry_interface_root").map_err(|error| error.to_string())?.to_path_buf();
     let child_executable = config.sdk_child_executable(&registry_interface_root)?;
     verify_sdk_child(&child_executable)?;
