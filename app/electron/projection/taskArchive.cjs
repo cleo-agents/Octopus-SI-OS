@@ -10,7 +10,7 @@ function readClientTaskArchive(run, clientInterfaceId) {
   const state = run.interface_state?.[clientInterfaceId];
   if (state?.client_archive === undefined) return null;
   const label = `task '${run.id}' archive`;
-  if (state.client_surface_role !== "task") throw new Error(`${label} belongs to a non-task client`);
+  if (!["task", "home"].includes(state.client_surface_role)) throw new Error(`${label} belongs to a client that cannot be archived`);
   const archive = state.client_archive;
   exactObjectKeys(archive,
     ["schema_version", "active_checkpoints", "checkpoints_digest", "archived_at_ms"],

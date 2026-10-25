@@ -55,8 +55,11 @@ were removed.
 
 **Home is the main screen.** It is the cheapest way into the system: the last
 reply, a composer, voice mode, and widgets. Think of it as the user's control
-panel. Home has no model picker and asks nothing technical of you. It hands
-out the work: when something needs doing, Home creates the runs that appear as
+panel. Home has no model picker and asks nothing technical of you. When more
+than one provider is installed for Home, its composer shows the current
+provider; choosing another starts a new Home conversation on that provider and
+keeps the earlier conversation in history. A Home conversation keeps one
+provider for its whole life. It hands out the work: when something needs doing, Home creates the runs that appear as
 Tasks.
 
 The nearest parallel is ChatGPT's Dots - always-on agents you simply talk to,

@@ -1610,6 +1610,21 @@ export type OctopusOsWorkspaceMutationRequest =
       }>;
     }
   | {
+      action: "switch_home_provider";
+      operationId: string;
+      workspace: {
+        rootEeId: string;
+        homeRunId: string;
+        homeInterfaceId: string;
+        expectedHomeSidecarDigest: string;
+      };
+      providerInterfaceId: string;
+      providerModel: string;
+      reasoningEffort: string;
+      serviceTier?: string;
+      expectedHomeRunDigest: string;
+    }
+  | {
       action: "delete_task";
       runId: string;
       expectedDigest: string;

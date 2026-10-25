@@ -152,6 +152,7 @@ async function main() {
     await verifyFreshAgentRecipe(temporary);
     await verifyPreludeSnapshotSetup(temporary);
     await verifyMaintenanceSetup(temporary);
+    await verifyHomeProviderSwitch(await fs.realpath(temporary));
     const fixtureHomeRoot = path.join(temporary, "home");
     const fixtureRegistryRoot = path.join(fixtureHomeRoot, "registry");
     await createFixture(fixtureHomeRoot, fixtureRegistryRoot);
@@ -2401,6 +2402,62 @@ async function verifyMaintenanceSetup(temporary) {
   console.log("maintenance setup: exact companions and writers, independent ceilings, partial/foreign/changed plan refusal passed");
 }
 
+async function verifyHomeProviderSwitch(temporary) {
+  const octopusHomeRoot = path.join(temporary, "switch-home");
+  const registryRoot = path.join(octopusHomeRoot, "registry");
+  await createFixture(octopusHomeRoot, registryRoot);
+  const planOperatorSurface = (input) => fixturePlan(octopusHomeRoot, registryRoot, input);
+  const setup = await initializeWorkspace({ octopusHomeRoot, registryRoot, request: setupRequest("switch_setup_12345678"), planOperatorSurface });
+  const runPath = path.join(octopusHomeRoot, "state", "runs", `${setup.homeRunId}.json`);
+  const run = JSON.parse(await fs.readFile(runPath, "utf8"));
+  run.interface_state[run.interface_state[setup.homeInterfaceId].provider_runtime_interface] = { authoring_generation: 0 };
+  await fs.writeFile(runPath, `${JSON.stringify(run)}\n`);
+  const previousSidecar = JSON.parse(await fs.readFile(path.join(registryRoot, "interface", setup.homeInterfaceId, "octopus_os.json"), "utf8"));
+  const scope = await fixtureProjectScope(octopusHomeRoot, registryRoot, setup);
+  const request = {
+    action: "switch_home_provider",
+    operationId: "home_switch_12345678",
+    workspace: fixtureWorkspaceIdentity(scope),
+    providerInterfaceId: "world_provider_claude_native",
+    providerModel: "fixture-claude",
+    reasoningEffort: "medium",
+    expectedHomeRunDigest: crypto.createHash("sha256").update(await fs.readFile(runPath)).digest("hex"),
+  };
+  await assert.rejects(mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope, planOperatorSurface,
+    request: { ...request, operationId: "home_switch_same_1234", providerInterfaceId: "world_provider_codex" } }), /already uses this provider/);
+  await assert.rejects(mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope, planOperatorSurface,
+    request: { ...request, operationId: "home_switch_stale_123", expectedHomeRunDigest: "0".repeat(64) } }), /Home changed/);
+  const switched = await mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope, request, planOperatorSurface });
+  assert.equal(switched.changed, true);
+  assert.equal(switched.previousHomeRunId, setup.homeRunId);
+  assert.notEqual(switched.homeRunId, setup.homeRunId);
+  const retired = JSON.parse(await fs.readFile(runPath, "utf8"));
+  assert.deepEqual(retired.active_checkpoints, []);
+  assert.deepEqual(retired.interface_state[setup.homeInterfaceId].client_archive.active_checkpoints, run.active_checkpoints);
+  const nextSidecar = JSON.parse(await fs.readFile(path.join(registryRoot, "interface", switched.homeInterfaceId, "octopus_os.json"), "utf8"));
+  assert.equal(nextSidecar.provider_choice_interface, "world_provider_claude_native");
+  assert.deepEqual(nextSidecar.authoring_profile, previousSidecar.authoring_profile);
+  assert.deepEqual(nextSidecar.task_authoring_profiles, previousSidecar.task_authoring_profiles);
+  assert.deepEqual(nextSidecar.presentation, previousSidecar.presentation);
+  const state = await readWorkspaceSetupState({ octopusHomeRoot, registryRoot });
+  assert.equal(state.status, "configured", state.errors.join("; "));
+  assert.deepEqual(state.home, { run_id: switched.homeRunId, interface_id: switched.homeInterfaceId });
+  const replay = await mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope, request, planOperatorSurface });
+  assert.equal(replay.changed, false);
+  assert.equal(replay.receiptDigest, switched.receiptDigest);
+  await assert.rejects(mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope, planOperatorSurface,
+    request: { ...request, operationId: "home_switch_again_12" } }), /does not match the configured Home/);
+  const nextScope = await fixtureProjectScope(octopusHomeRoot, registryRoot, { ...setup, homeRunId: switched.homeRunId, homeInterfaceId: switched.homeInterfaceId });
+  const created = await mutateWorkspaceProject({ octopusHomeRoot, registryRoot, scope: nextScope, planOperatorSurface, request: {
+    action: "create_project", operationId: "switch_project_12345678", workspace: fixtureWorkspaceIdentity(nextScope),
+    parentEeId: setup.rootEeId, expectedParentDigest: nextScope.environments.find((row) => row.eeId === setup.rootEeId).recordDigest,
+    templateName: "project", name: "After switch", goal: "After switch", presentation: { icon: "flask", color: "blue" },
+  } });
+  assert.equal(created.homeRunId, switched.homeRunId);
+  assert.equal((await readWorkspaceSetupState({ octopusHomeRoot, registryRoot })).status, "configured");
+  console.log("home provider switch: new Home, retired history, receipt chain, replay, stale and same-provider refusal passed");
+}
+
 async function fixturePlan(octopusHomeRoot, registryRoot, { eeInstancesRoot, request }) {
   const rootRecord = JSON.parse(await fs.readFile(path.join(eeInstancesRoot, `${request.eeId}.json`), "utf8"));
   const clientSurfaceRole = request.clientSurfaceRole ?? "home";
@@ -2713,6 +2770,10 @@ const execution = process.argv[2] === "conditioned-recover"
   })
   : process.argv[2] === "project-policy"
   ? verifyProjectPolicies()
+  : process.argv[2] === "home-switch"
+  ? fs.mkdtemp(path.join(os.tmpdir(), "octopus-home-switch-test-")).then(async (temporary) => {
+    try { await verifyHomeProviderSwitch(await fs.realpath(temporary)); } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  })
   : process.argv[2] === "task-archive"
   ? fs.mkdtemp(path.join(os.tmpdir(), "octopus-task-archive-test-")).then(async (temporary) => {
       try { await verifyTaskArchive(temporary); } finally { await fs.rm(temporary, { recursive: true, force: true }); }

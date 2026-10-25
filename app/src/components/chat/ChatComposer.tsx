@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type PointerEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import type { OctopusClientAccessProfile, OctopusClientAttachmentStageHandle, OctopusProviderInterface } from "../../electron";
 import { Glyph } from "../IconGlyphs";
 import { cubicCirclePath, threeQuarterRingPath } from "../icon-glyphs/geometric-primitives";
@@ -53,6 +53,7 @@ type Props = {
   workerEnvironmentRooms?: ChatWorkerEnvironmentRoom[];
   workerInterfaceId?: string;
   executionContextLocked?: boolean;
+  homeProviderControl?: ReactNode;
   submissionMode: "send" | "steer" | "queue";
   canSubmit: boolean;
   canQueue?: boolean;
@@ -127,6 +128,7 @@ export function ChatComposer({
   workerEnvironmentRooms,
   workerInterfaceId,
   executionContextLocked,
+  homeProviderControl,
   submissionMode,
   canSubmit,
   canQueue = false,
@@ -576,6 +578,7 @@ export function ChatComposer({
                             onServiceTierChange={onServiceTierChange}
                           />
                         ) : null}
+                        {variant === "home" ? homeProviderControl : null}
                         <DictationButton
                           canRetry={dictation.canRetryDictation}
                           isTranscribing={dictation.isTranscribing}

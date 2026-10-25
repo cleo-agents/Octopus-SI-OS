@@ -31,7 +31,7 @@ function operatorChatContextProjection(store) {
     const homeProfile = osScope.status === "invalid"
       ? null
       : arrayValue(osScope.client_runs)
-        .find((run) => stringValue(run?.surface_role) === "home")?.authoring_profile ?? null;
+        .find((run) => stringValue(run?.surface_role) === "home" && !run?.archived)?.authoring_profile ?? null;
     const authoringProfiles = new Map([
       ...indexedTaskProfiles,
       ...(homeProfile ? [{ profile: homeProfile, index: 0 }] : []),

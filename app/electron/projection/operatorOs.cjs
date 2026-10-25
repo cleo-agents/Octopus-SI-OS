@@ -90,7 +90,7 @@ function operatorOsProjection(store) {
     );
     const scopeEeIds = rootEeId ? descendantEnvironmentIds(rootEeId, eeById) : new Set();
     const scopedClientRuns = clientRuns.filter((row) => scopeEeIds.has(row.ee_id));
-    const homeCandidates = scopedClientRuns.filter((row) => row.surface_role === "home");
+    const homeCandidates = scopedClientRuns.filter((row) => row.surface_role === "home" && !row.archived);
     let homeRun = null;
     if (homeCandidates.length > 1) {
       errors.push(`Octopus OS scope '${rootEeId}' projects more than one Home run`);

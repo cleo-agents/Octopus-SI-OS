@@ -26,6 +26,7 @@ import type { OctopusClientAccessProfile } from "../../electron";
 import { Glyph, type GlyphName } from "../IconGlyphs";
 import { ShellTooltip } from "../shell/ShellTooltip";
 import { ChatComposer } from "../chat/ChatComposer";
+import { HomeProviderSwitch } from "../chat/HomeProviderSwitch";
 import type { ProjectedFileSource } from "../chat/ProjectedFilePicker";
 import { AirHandVoiceController } from "./AirHandVoiceController";
 import { HomeCallControls } from "./HomeCallControls";
@@ -1035,6 +1036,13 @@ function HomeCommandDock({ awaitingClientResult, callActive, commandsActive, onV
           contextUsage={workspace.contextUsage}
           hasQueuedMessages={workspace.queuedTurns.length > 0}
           fileInputRef={workspace.fileInputRef}
+          homeProviderControl={(
+            <HomeProviderSwitch
+              accessProfile={workspace.accessProfile}
+              disabled={workspace.busy || workspace.turnOpen || awaitingClientResult || workspace.queuedTurns.length > 0}
+              providers={workspace.providerInterfaces}
+            />
+          )}
           interruptPending={workspace.turnControlPending || Boolean(deferredStopAtMs)}
           listenToGlobalCommands={commandsActive && !callActive}
           onFilesPicked={workspace.onFilesPicked}

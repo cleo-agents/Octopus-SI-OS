@@ -1476,7 +1476,7 @@ async function clientSetupWorkspaceProof(plan, operationId) {
     || state.receipt?.operation_id !== operationId
     || state.receipt.request_digest !== plan.workspace.request_digest
   ) return null;
-  const defaultReferences = await clientSetupProjectDefaultProof(plan, state.receipt);
+  const defaultReferences = await clientSetupProjectDefaultProof(plan, state);
   if (!defaultReferences) return null;
   const triggers = await setupTriggerProof(path.join(resolveOctopusHome(), "registry"), resolveOctopusHome(), await clientSetupTriggerEntries(plan));
   if (!triggers) return null;
@@ -1524,7 +1524,7 @@ async function applyClientSetupProjectDefaults(plan, operationId) {
     || state.receipt.request_digest !== plan.workspace.request_digest
   ) throw new Error("Workspace receipt is not ready for Project defaults.");
   for (const projectDefault of plan.workspace.project_defaults) {
-    const context = await clientSetupProjectDefaultContext(projectDefault, state.receipt);
+    const context = await clientSetupProjectDefaultContext(projectDefault, state);
     if (context.proven) continue;
     const request = projectDefault.product_kind === "application"
       ? {
@@ -1563,15 +1563,15 @@ async function applyClientSetupProjectDefaults(plan, operationId) {
     );
     getProjectionStore("live").invalidate();
   }
-  if (!await clientSetupProjectDefaultProof(plan, state.receipt)) {
+  if (!await clientSetupProjectDefaultProof(plan, state)) {
     throw new Error("Workspace Project defaults were applied without canonical read-back proof.");
   }
 }
 
-async function clientSetupProjectDefaultProof(plan, receipt) {
+async function clientSetupProjectDefaultProof(plan, state) {
   const references = [];
   for (const projectDefault of plan.workspace.project_defaults) {
-    const context = await clientSetupProjectDefaultContext(projectDefault, receipt);
+    const context = await clientSetupProjectDefaultContext(projectDefault, state);
     if (!context.proven) return null;
     references.push(clientSetupReference(
       "workspace_receipt",
@@ -1594,15 +1594,15 @@ async function clientSetupProjectDefaultProof(plan, receipt) {
   return references;
 }
 
-async function clientSetupProjectDefaultContext(projectDefault, receipt) {
+async function clientSetupProjectDefaultContext(projectDefault, { receipt, home }) {
   const store = getProjectionStore("live");
   store.invalidate();
   const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
   if (
     scope?.status !== "ready"
     || scope.root_ee_id !== receipt.root_ee_id
-    || scope.home_run_id !== receipt.home_run_id
-    || scope.home_interface_id !== receipt.home_interface_id
+    || scope.home_run_id !== home?.run_id
+    || scope.home_interface_id !== home?.interface_id
   ) throw new Error("Workspace scope does not match its receipt while applying Project defaults.");
   const projectReceipts = new Map(receipt.project_ee_ids.map((entry) => [entry.key, entry.ee_id]));
   const missingProjectKey = projectDefault.project_keys.find((projectKey) => !projectReceipts.has(projectKey));
@@ -3733,8 +3733,8 @@ ipcMain.handle("octopus:workspace-setup-state", async (_event, token) => {
       requestDigest: state.receipt.request_digest,
       completedAt: state.receipt.completed_at,
       rootEeId: state.receipt.root_ee_id,
-      homeRunId: state.receipt.home_run_id,
-      homeInterfaceId: state.receipt.home_interface_id,
+      homeRunId: state.home?.run_id ?? state.receipt.home_run_id,
+      homeInterfaceId: state.home?.interface_id ?? state.receipt.home_interface_id,
       projects: state.receipt.project_ee_ids.map((project) => ({
         key: project.key,
         eeId: project.ee_id,
@@ -3818,7 +3818,7 @@ ipcMain.handle("octopus:os-workspace-mutate", async (event, token, request) => {
   const octopusHome = resolveOctopusHome();
   const registryRoot = path.join(octopusHome, "registry");
   let outcome;
-  if (["create_agent_template", "configure_agent_template"].includes(request?.action)) {
+  if (["create_agent_template", "configure_agent_template", "switch_home_provider"].includes(request?.action)) {
     const declared = await store.read(projectionReadRequest("projection.operator.providers.list"));
     const providers = await getClientProviderMetadata().catalog(declared.providers.filter((provider) => provider.id === request.providerInterfaceId));
     getClientAccessController().requireSession(token, ["live"]);
