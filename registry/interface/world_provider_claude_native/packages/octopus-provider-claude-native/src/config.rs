@@ -22,10 +22,51 @@ pub struct SdkChildConfig {
 #[serde(deny_unknown_fields)]
 pub struct InputMessage {
     pub text_fields: Vec<String>,
-    pub client_context_field: String,
-    pub attachments_field: String,
-    pub identity_field: String,
+    #[serde(default)]
+    pub client_context_field: Option<String>,
+    #[serde(default)]
+    pub attachments_field: Option<String>,
+    #[serde(default)]
+    pub identity_field: Option<String>,
     pub identity_required: bool,
+    #[serde(default)]
+    pub context_fields: Vec<String>,
+    #[serde(default)]
+    pub request_context_fields: BTreeMap<String, RequestContextKind>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestContextKind {
+    Array,
+    Object,
+}
+
+impl InputMessage {
+    fn validate(&self, label: &str) -> Result<(), String> {
+        let invalid = || format!("input_messages '{label}' has invalid fields");
+        if self.text_fields.is_empty() && self.request_context_fields.is_empty() {
+            return Err(format!("input_messages '{label}' declares no text_fields"));
+        }
+        if self.identity_required && self.identity_field.is_none() {
+            return Err(format!("input_messages '{label}' requires an identity but declares no identity_field"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for field in self
+            .text_fields
+            .iter()
+            .chain(self.client_context_field.iter())
+            .chain(self.attachments_field.iter())
+            .chain(self.identity_field.iter())
+            .chain(self.context_fields.iter())
+            .chain(self.request_context_fields.keys())
+        {
+            if field.is_empty() || field.trim() != field || !seen.insert(field) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -76,9 +117,7 @@ impl ClaudeNativeConfig {
         }
         for (label, input) in &config.input_messages {
             validate_identity(label, "input_messages label")?;
-            if input.text_fields.is_empty() {
-                return Err(format!("input_messages '{label}' declares no text_fields"));
-            }
+            input.validate(label)?;
         }
         import_relative_path(&config.sdk_child.executable)?;
         config.instruction_selection()?;

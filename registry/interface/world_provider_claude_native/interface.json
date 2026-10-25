@@ -524,6 +524,21 @@
           "attachments_field": "attachments",
           "identity_field": "message_id",
           "identity_required": false
+        },
+        "realtime.delegation": {
+          "text_fields": [
+            "input_text"
+          ],
+          "client_context_field": "client_context",
+          "identity_field": "delegation_id",
+          "identity_required": true,
+          "context_fields": [
+            "call_id",
+            "correlation_id"
+          ],
+          "request_context_fields": {
+            "transcript": "array"
+          }
         }
       },
       "run_authoring_profile": {

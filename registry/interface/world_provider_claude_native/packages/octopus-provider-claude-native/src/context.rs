@@ -9,7 +9,7 @@ const CONTEXT_REFERENCE_LABEL: &str = "context.reference";
 const OPERATOR_MESSAGE_LABEL: &str = "operator.message";
 const REPLY_LABELS: [&str; 2] = ["interface.artifact.output", "turn.agent_message"];
 const MAX_ARTIFACT_TEXT_BYTES: usize = 32 * 1024;
-const HIDDEN_FIELDS: [&str; 9] = [
+const HIDDEN_FIELDS: [&str; 10] = [
     "session_context",
     "context_window_usage",
     "provider_token_usage",
@@ -19,6 +19,7 @@ const HIDDEN_FIELDS: [&str; 9] = [
     "completed_at_ms",
     "lifecycle",
     "claude_continuity",
+    "in_reply_to",
 ];
 
 pub struct TurnContext {
@@ -35,6 +36,7 @@ impl TurnContext {
 pub fn assemble(
     envelope: &InterfaceInvocationEnvelope,
     record_bytes: &[u8],
+    label: &str,
     input: &InputMessage,
     instruction_selection: &[String],
     session_artifacts: &[SessionContextArtifact],
@@ -56,11 +58,7 @@ pub fn assemble(
 
     let payload: Value = serde_json::from_slice(&envelope.read_artifact_payload().map_err(|error| error.to_string())?)
         .map_err(|error| format!("input artifact is not JSON: {error}"))?;
-    let text = input
-        .text_fields
-        .iter()
-        .find_map(|field| payload.get(field).and_then(Value::as_str).filter(|text| !text.trim().is_empty()))
-        .ok_or("input artifact carries no text in its declared text fields")?;
+    let text = crate::input::decode(label, input, &payload)?.prompt_text();
 
     let mut prompt = String::new();
     if let Some(grant) = octopus_model_context_render::render_model_context_block(metadata) {
@@ -79,7 +77,7 @@ pub fn assemble(
             prompt.push_str("\n\nCurrent message:\n");
         }
     }
-    prompt.push_str(text);
+    prompt.push_str(&text);
     Ok(TurnContext { system_prompt: system.join("\n\n"), prompt })
 }
 
