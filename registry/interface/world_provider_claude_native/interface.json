@@ -1,0 +1,57 @@
+{
+  "id": "world_provider_claude_native",
+  "interface_type": "world",
+  "role": "provider",
+  "direction": "bidirectional",
+  "source_names": [
+    "claude_native"
+  ],
+  "interface_driver_ref": "claude_agent_sdk",
+  "interface_policy": {
+    "variables": {
+      "max_attempts": {
+        "reduce": "min",
+        "default": 5
+      },
+      "max_in_flight": {
+        "reduce": "min",
+        "default": 1
+      },
+      "models": {
+        "reduce": "intersection",
+        "default": [
+          "claude-fable-5-1",
+          "claude-fable-5",
+          "claude-sonnet-5-5",
+          "claude-sonnet-5",
+          "claude-opus-5-5",
+          "claude-opus-5",
+          "claude-opus-4-8",
+          "claude-opus-4-7",
+          "claude-opus-4-6",
+          "claude-sonnet-4-6",
+          "claude-haiku-5-5",
+          "claude-haiku-4-5"
+        ]
+      }
+    }
+  },
+  "interface_driver_config": {
+    "supported_reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "private_config": {
+      "model": "claude-sonnet-5",
+      "reasoning_effort": "medium",
+      "sdk_child": {
+        "executable": "owner://packages/octopus-claude-sdk-child/bin/octopus-claude-sdk-child",
+        "protocol": "octopus.claude_sdk_child/1",
+        "claude_executable": "claude"
+      }
+    }
+  }
+}
