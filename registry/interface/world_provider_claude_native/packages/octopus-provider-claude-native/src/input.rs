@@ -95,3 +95,19 @@ fn declared_text(object: &Map<String, Value>, contract: &InputMessage) -> Result
     }
     Ok(text.map(str::to_owned))
 }
+
+/// The text of a turn started by an admitted artifact that no
+/// `input_messages` entry declares, by the rule the Codex provider applies:
+/// a payload that carries `text`, `prompt` or `task` text is that text;
+/// any other payload reaches the model whole, under its label and source.
+pub fn artifact_turn_text(label: &str, source_interface: Option<&str>, payload: &Value) -> Result<String, String> {
+    if let Some(object) = payload.as_object() {
+        for field in ["text", "prompt", "task"] {
+            if let Some(text) = object.get(field).and_then(Value::as_str).filter(|text| !text.trim().is_empty()) {
+                return Ok(text.to_string());
+            }
+        }
+    }
+    serde_json::to_string_pretty(&json!({"artifact": {"label": label, "source_interface": source_interface, "payload": payload}}))
+        .map_err(|error| format!("input artifact '{label}' could not be rendered: {error}"))
+}

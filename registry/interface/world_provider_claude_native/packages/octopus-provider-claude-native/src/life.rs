@@ -75,6 +75,21 @@ struct PendingCall {
     recovered: bool,
 }
 
+/// What a turn answers: a declared input message, or the rendered text of
+/// another admitted artifact.
+enum TurnInput<'a> {
+    Declared { label: &'a str, contract: &'a crate::config::InputMessage },
+    Text { label: &'a str, text: String },
+}
+
+impl TurnInput<'_> {
+    fn label(&self) -> &str {
+        match self {
+            Self::Declared { label, .. } | Self::Text { label, .. } => label,
+        }
+    }
+}
+
 struct InterruptedCall {
     thread_id: Option<String>,
     turn: String,
@@ -239,7 +254,7 @@ impl Provider {
         match recovery {
             ProviderSourceRecovery::Completed => return Ok(()),
             ProviderSourceRecovery::Process => {}
-            ProviderSourceRecovery::Interrupted { last_artifact_label } if !cut || declared.is_none() => {
+            ProviderSourceRecovery::Interrupted { last_artifact_label } if !cut => {
                 let failure = TurnFailure::new(
                     "transport_turn_interrupted",
                     format!("the provider restarted after handing '{last_artifact_label}'; the model call was not replayed"),
@@ -259,25 +274,28 @@ impl Provider {
             return self.control_between_turns(&handoff, envelope, &run, seq).await;
         }
         if let Some(input) = declared {
-            return self.begin_turn(&handoff, envelope, &pinned, &run, seq, label, &input, reply_to, cut).await;
+            let input = TurnInput::Declared { label, contract: &input };
+            return self.begin_turn(&handoff, envelope, &pinned, &run, seq, input, reply_to, cut).await;
         }
-        let payload: Value = match envelope
-            .read_artifact_payload()
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
-        {
-            Ok(payload) => payload,
-            Err(error) => {
-                return self.hand_failure(&handoff, None, None, &TurnFailure::new("input_unreadable", error)).await;
-            }
+        let bytes = match envelope.read_artifact_payload() {
+            Ok(bytes) => bytes,
+            Err(error) => return self.hand_failure(&handoff, None, None, &TurnFailure::new("input_unreadable", error.to_string())).await,
         };
-        match crate::tools::decode_tool_result(&payload) {
-            Ok(Some(result)) => self.continue_after_result(&handoff, envelope, &pinned, &run, seq, label, result).await,
-            Ok(None) => {
-                let failure = TurnFailure::new("input_not_supported", format!("this provider does not accept '{label}' artifacts"));
-                self.hand_failure(&handoff, None, None, &failure).await
-            }
-            Err(error) => self.hand_failure(&handoff, None, None, &TurnFailure::new("tool_result_malformed", error)).await,
+        let source = serde_json::to_value(&envelope.artifact).map_err(|error| error.to_string())?;
+        let text = match serde_json::from_slice::<Value>(&bytes) {
+            Ok(payload) => match crate::tools::decode_tool_result(&payload) {
+                Ok(Some(result)) => return self.continue_after_result(&handoff, envelope, &pinned, &run, seq, label, result).await,
+                Ok(None) => crate::input::artifact_turn_text(label, movement_source(own).as_deref(), &payload),
+                Err(error) => return self.hand_failure(&handoff, None, None, &TurnFailure::new("tool_result_malformed", error)).await,
+            },
+            Err(_) => match std::str::from_utf8(&bytes) {
+                Ok(text) if !text.trim().is_empty() => Ok(text.to_string()),
+                _ => Err(format!("input artifact '{label}' is neither JSON nor non-empty text")),
+            },
+        };
+        match text {
+            Ok(text) => self.begin_turn(&handoff, envelope, &pinned, &run, seq, TurnInput::Text { label, text }, Some(&source), cut).await,
+            Err(error) => self.hand_failure(&handoff, Some(&source), None, &TurnFailure::new("input_unreadable", error)).await,
         }
     }
 
@@ -368,19 +386,23 @@ impl Provider {
         pinned: &[u8],
         run: &str,
         seq: u64,
-        label: &str,
-        input: &crate::config::InputMessage,
+        input: TurnInput<'_>,
         reply_to: Option<&Value>,
         cut: bool,
     ) -> Result<(), String> {
+        let label = input.label().to_string();
         let resume = self.journal.claude_session_id(run);
         let history = handoff.current_session_context_artifacts().await;
         let selection = self.config.instruction_selection()?;
         let recovering = cut && resume.is_some();
-        let context = if recovering {
-            crate::context::assemble_with_text(envelope, pinned, &selection, &history, false, CUT_TURN_NOTE)
-        } else {
-            crate::context::assemble(envelope, pinned, label, input, &selection, &history, resume.is_none())
+        let context = match (&input, recovering) {
+            (_, true) => crate::context::assemble_with_text(envelope, pinned, &selection, &history, false, CUT_TURN_NOTE),
+            (TurnInput::Declared { contract, .. }, false) => {
+                crate::context::assemble(envelope, pinned, &label, contract, &selection, &history, resume.is_none())
+            }
+            (TurnInput::Text { text, .. }, false) => {
+                crate::context::assemble_with_text(envelope, pinned, &selection, &history, resume.is_none(), text)
+            }
         };
         let context = match context {
             Ok(context) => context,
@@ -396,7 +418,7 @@ impl Provider {
         self.journal.record_inflight(run, Some(InflightTurn { source_seq: seq, turn: turn.clone(), reply_to: reply_to.cloned(), pending_call: None }))?;
         let waiting = self.pending_calls.iter().find(|(_, call)| call.run == run && !call.recovered).map(|(id, _)| id.clone());
         let started = match waiting {
-            Some(call_id) => self.redirect_waiting_turn(&call_id, &turn, &context, label, envelope).await,
+            Some(call_id) => self.redirect_waiting_turn(&call_id, &turn, &context, &label, envelope).await,
             None => self.start_turn(&session, &turn, resume, context, catalog).await,
         };
         let outcome = match started {
@@ -1052,6 +1074,11 @@ fn steer_control_id(label: &str, envelope: &InterfaceInvocationEnvelope, config:
         payload.get(&field)?.as_str().map(str::to_owned)
     });
     from_payload.unwrap_or_else(|| envelope.artifact.id.as_str().to_string())
+}
+
+/// The interface a movement came from, as the ledger records it.
+fn movement_source(own: &OwnOutboundMovement) -> Option<String> {
+    serde_json::to_value(&own.movement.from).ok()?.get("Interface")?.as_str().map(str::to_owned)
 }
 
 fn session_name(run: &str) -> String {

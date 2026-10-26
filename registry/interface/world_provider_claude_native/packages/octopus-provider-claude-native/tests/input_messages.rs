@@ -126,3 +126,15 @@ fn input_contracts_with_invalid_fields_fail_closed() {
         assert!(error.contains(expected), "{field}: {error}");
     }
 }
+
+#[test]
+fn an_undeclared_artifact_reaches_claude_by_the_codex_rule() {
+    use octopus_provider_claude_native::artifact_turn_text;
+    assert_eq!(artifact_turn_text("task.request", Some("world_x"), &json!({"task": "Summarize the run", "extra": 1})).unwrap(), "Summarize the run");
+    assert_eq!(artifact_turn_text("x", None, &json!({"text": "  ", "prompt": "use the prompt"})).unwrap(), "use the prompt");
+    let experience = json!({"source": {"run": "run_home"}, "experience": [{"role": "user", "text": "I prefer Zig"}]});
+    let rendered: Value = serde_json::from_str(&artifact_turn_text("memory.experience.input", Some("system_context_projection_m"), &experience).unwrap()).unwrap();
+    assert_eq!(rendered["artifact"]["label"], "memory.experience.input");
+    assert_eq!(rendered["artifact"]["source_interface"], "system_context_projection_m");
+    assert_eq!(rendered["artifact"]["payload"], experience, "the payload reaches the model whole");
+}
