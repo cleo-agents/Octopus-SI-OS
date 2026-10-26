@@ -124,7 +124,9 @@ function operatorChatListProjection(store) {
         writable: entry.writable && !archived,
         archived,
         os_root_ee_id: entry.osRootEeId,
-        voice_context: projectHomeVoiceContext(record, octopusOsInterfaceSidecars(projection).get(chatInterfaceId), chatState, voiceRunsById),
+        voice_context: archived
+          ? null
+          : projectHomeVoiceContext(record, octopusOsInterfaceSidecars(projection).get(chatInterfaceId), chatState, voiceRunsById),
         turn_open: turn.open,
         turn_state: turn.state,
         ee_id: eeId,

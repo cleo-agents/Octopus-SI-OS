@@ -1068,7 +1068,9 @@ impl Provider {
         self.hand_terminal(handoff, TURN_ERROR_LABEL, reply_to, live, value).await
     }
 
-    /// Hands a client-visible terminal output. `reply_to` is the admitted
+    /// Hands a client-visible terminal output. The payload names its own
+    /// label, as every Codex output does, so a later run that is handed this
+    /// output as context can read it without the manifest. `reply_to` is the admitted
     /// turn input this output answers. It is recorded as `in_reply_to`, the
     /// same link the Codex provider writes, so the client can attribute the
     /// output to its source; for a voice delegation that is what lets the
@@ -1083,6 +1085,7 @@ impl Provider {
         live: Option<LiveTurn>,
         mut value: Value,
     ) -> Result<(), String> {
+        value["label"] = Value::String(label.to_string());
         if let Some(source) = reply_to {
             value["in_reply_to"] = source.clone();
         }

@@ -1610,6 +1610,22 @@ export type OctopusOsWorkspaceMutationRequest =
       }>;
     }
   | {
+      action: "switch_home_provider";
+      operationId: string;
+      workspace: {
+        rootEeId: string;
+        homeRunId: string;
+        homeInterfaceId: string;
+        expectedHomeSidecarDigest: string;
+      };
+      providerInterfaceId: string;
+      providerModel: string;
+      reasoningEffort: string;
+      serviceTier?: string;
+      expectedHomeRunDigest: string;
+      handoffMessages?: Array<{ artifactId: string; messageId: string; role: "user" | "assistant"; text: string }>;
+    }
+  | {
       action: "delete_task";
       runId: string;
       expectedDigest: string;
@@ -1773,6 +1789,7 @@ export type OctopusWorkspaceSetupState = {
     projects: Array<{ key: string; eeId: string }>;
   } | null;
   errors: string[];
+  switching: boolean;
 };
 
 export type OctopusClientSetupPlan = {

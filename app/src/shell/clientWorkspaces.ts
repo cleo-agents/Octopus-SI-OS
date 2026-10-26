@@ -556,10 +556,11 @@ export function setClientSidebarSectionCollapsed(
 }
 
 export function clientHomeRunId(
-  runs: ReadonlyArray<{ runId: string; eeId: string; clientSurfaceRole: "home" | "task"; osRootEeId: string }>,
+  runs: ReadonlyArray<{ runId: string; eeId: string; clientSurfaceRole: "home" | "task"; osRootEeId: string; archived: boolean }>,
 ): string {
   const candidates = runs.filter((run) => (
     run.clientSurfaceRole === "home"
+    && !run.archived
     && Boolean(run.osRootEeId)
     && run.eeId === run.osRootEeId
   ));

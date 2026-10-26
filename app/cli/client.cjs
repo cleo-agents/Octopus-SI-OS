@@ -136,7 +136,7 @@ function createClient(environment, dependencies = {}) {
 
   async function task(selector) {
     const all = await tasks();
-    if (selector === "home") return exactChoice(all.filter((row) => row.isHome), "Home");
+    if (selector === "home") return exactChoice(all.filter((row) => row.isHome && !row.archived), "Home");
     if (selector === "last") return exactChoice(all.filter((row) => !row.isHome && !row.archived).slice(0, 1), "recent task");
     return select(all, selector, "task", "title");
   }

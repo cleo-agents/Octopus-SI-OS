@@ -65,6 +65,7 @@ type WorkspaceProjection = {
   status: "not_configured" | "configured" | "degraded";
   receipt: WorkspaceReceipt | null;
   errors: string[];
+  switching: boolean;
 };
 
 type ScopeProjection = {
@@ -782,7 +783,7 @@ function completedSetupMatrix(snapshot: GateSnapshot, draft: WorkspaceSetupDraft
     || !receipt
     || receipt.operationId !== setup.operationId
     || receipt.requestDigest !== setup.plan.workspace.request_digest
-    || !workspaceIdentityMatchesScope(receipt, snapshot.scope)
+    || !snapshot.workspace.switching && !workspaceIdentityMatchesScope(receipt, snapshot.scope)
   ) {
     return {
       mode: "blocked",
@@ -1358,11 +1359,12 @@ function resetApplyingDraft(
 }
 
 async function readGateSnapshot(includeCatalog = true): Promise<GateSnapshot> {
-  const [workspaceRaw, scopeRaw, clientSetup] = await Promise.all([
-    readWorkspaceSetupState(),
-    readProjection("projection.operator.os.scope"),
-    readCurrentClientSetup(),
-  ]);
+  const readPair = () => Promise.all([readWorkspaceSetupState(), readProjection("projection.operator.os.scope")]);
+  let [[workspaceRaw, scopeRaw], clientSetup] = await Promise.all([readPair(), readCurrentClientSetup()]);
+  const first = parseWorkspaceProjection(workspaceRaw);
+  if (first.receipt && !workspaceIdentityMatchesScope(first.receipt, parseScopeProjection(scopeRaw))) {
+    [workspaceRaw, scopeRaw] = await readPair();
+  }
   const localPackages = includeCatalog && clientSetup?.status !== "complete"
     ? parseLocalPackagesProjection(await readProjection("projection.operator.os.local_packages"))
     : null;
@@ -1380,7 +1382,7 @@ function parseWorkspaceProjection(value: unknown): WorkspaceProjection {
   const receipt = row.receipt === null ? null : parseWorkspaceReceipt(row.receipt);
   if (status === "configured" && !receipt) throw new Error("configured workspace has no receipt");
   if (status === "not_configured" && receipt) throw new Error("unconfigured workspace unexpectedly has a receipt");
-  return { status, receipt, errors: stringArray(row.errors, "workspace setup errors") };
+  return { status, receipt, errors: stringArray(row.errors, "workspace setup errors"), switching: row.switching === true };
 }
 
 function parseWorkspaceReceipt(value: unknown): WorkspaceReceipt {

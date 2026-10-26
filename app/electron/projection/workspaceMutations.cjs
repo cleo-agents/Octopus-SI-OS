@@ -23,6 +23,7 @@ async function mutateOctopusOsWorkspace(registryRoot, octopusHomeRoot, scope, re
     "delete_agent_template",
     "delete_project",
     "update_project_presentation",
+    "switch_home_provider",
     "delete_task",
     "rename_task",
     "set_task_archived",
@@ -120,7 +121,7 @@ async function mutateOctopusOsWorkspace(registryRoot, octopusHomeRoot, scope, re
         hooks.chatContexts,
       );
     }
-    if (["create_project", "delete_project", "update_project_presentation"].includes(action)) {
+    if (["create_project", "delete_project", "update_project_presentation", "switch_home_provider"].includes(action)) {
       if (typeof hooks.mutateWorkspaceProject !== "function") {
         throw new Error("Workspace Project authoring transaction is unavailable");
       }

@@ -7,6 +7,7 @@ const { chatIdentityFromRunRecord, readConversationState, resolveContinuationSta
 const { resolveRunRecordsRoot, writeContentAddressedPayload } = require("./operatorMessages.cjs");
 const { runOperatorRevisionCommand } = require("./operatorTurns.cjs");
 const { validatePlannedHostBindings } = require("./hostBindings.cjs");
+const { resolveConversationHandoff } = require("./pinnedContext.cjs");
 const { readFileHashIfPresent, resolveRegistryRoot, waitForInterfaceSocket, withRunAuthoringLock } = require("./publication.cjs");
 const { readConfig, resolveEeInstancesRoot, resolveInstallationRoot, resolvePackageExecutable } = require("./roots.cjs");
 const { assertPublicationExpansion, interfaceEndpoint, operatorContextArtifactBindings, operatorDoorHostSlots, operatorExternalInputs, operatorExternalRelays, operatorModelOutputs, operatorPayloadArtifactBindings, operatorPublications, operatorSelectedTools, operatorSelectedWorkerEnvironmentKinds, operatorSurfaceRole, planOperatorChatTopology, plannedAdditionalRunWrites, plannedClientRemoval, plannedClientWrite, plannedExactIds, safeContractToken, safeSha256, validatePlannedRunRecord } = require("./topologyPlan.cjs");
@@ -99,6 +100,7 @@ async function planOperatorChatSurface(options, request) {
     "selectedTools",
     "clientSurfaceRole",
     "continuation",
+    "handoff",
   ]);
   if (!isObject(request)) throw new Error("operator chat surface plan must be a JSON object");
   const unknownFields = Object.keys(request).filter((field) => !allowedFields.has(field));
@@ -134,12 +136,17 @@ async function planOperatorChatSurface(options, request) {
   if (await readJsonDocumentIfPresent(chatRunPath)) {
     throw new Error(`operator chat surface plan refuses existing run '${runId}'`);
   }
-  const continuation = await resolveContinuationState({
-    config,
-    octopusHome,
-    requestedRunId: "",
-    request: request.continuation,
-  });
+  if (request.continuation !== undefined && request.handoff !== undefined) {
+    throw new Error("operator chat surface plan takes either a continuation or a handoff");
+  }
+  const continuation = request.handoff === undefined
+    ? await resolveContinuationState({
+      config,
+      octopusHome,
+      requestedRunId: "",
+      request: request.continuation,
+    })
+    : await resolveConversationHandoff(options, { config, octopusHome, registryRoot, request: request.handoff });
   const conversationState = await readConversationState({
     octopusHome,
     existing: null,

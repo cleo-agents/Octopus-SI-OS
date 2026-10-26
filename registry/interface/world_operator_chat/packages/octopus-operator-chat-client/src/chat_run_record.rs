@@ -763,11 +763,16 @@ pub(crate) fn build_chat_run_record(
         "checkpoints": checkpoints,
         "active_checkpoints": active_checkpoints,
     });
+    let pinned_excerpts = conversation
+        .pinned_context_items
+        .iter()
+        .map(|item| ArtifactBindingSeed { id: item.artifact_id.clone() })
+        .collect::<Vec<_>>();
     context_bindings::bind_selected_context(
         &mut record,
         existing,
         &identity.model_interface_id,
-        config.run.context_artifact_bindings.iter().chain(context_artifact_bindings),
+        config.run.context_artifact_bindings.iter().chain(context_artifact_bindings).chain(&pinned_excerpts),
         identity.code_mode_owners.values().flat_map(|owner| owner.prelude_sources.iter().map(|source| &source.source.id)),
     )?;
     let content = pretty_json(&record)?;

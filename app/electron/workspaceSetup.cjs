@@ -234,7 +234,9 @@ async function mutateWorkspaceProject(options) {
       return projectReceiptOutcome(recovered, false);
     }
     const workspaceReceipt = await requireConfiguredWorkspace(roots, scope, request.workspace);
-    const planned = request.action === "create_project"
+    const planned = request.action === "switch_home_provider"
+      ? await planHomeProviderSwitch(roots, scope, request, options?.planOperatorSurface)
+      : request.action === "create_project"
       ? await planProjectCreate(roots, scope, request, options?.planOperatorSurface)
       : request.action === "delete_project"
         ? await planProjectDelete(roots, scope, request, workspaceReceipt)
@@ -326,6 +328,20 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
   if (receipts.length > 1) {
     recoveryErrors.push(`workspace receipt root contains ${receipts.length} configured workspaces`);
   }
+  let homes = [];
+  if (receipts[0]) {
+    try {
+      homes = await workspaceHomeChain(roots, receipts[0]);
+    } catch (error) {
+      recoveryErrors.push(errorMessage(error));
+    }
+  }
+  let switching = [];
+  try {
+    switching = await pendingHomeSwitches(roots);
+  } catch (error) {
+    recoveryErrors.push(errorMessage(error));
+  }
   const receiptedProjectEeIds = new Set();
   for (const entry of await workspaceReceiptEntries(roots.projectReceiptsRoot)) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) {
@@ -338,8 +354,7 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
       const workspace = receipts[0];
       if (workspace && (
         receipt.root_ee_id !== workspace.root_ee_id
-        || receipt.home_run_id !== workspace.home_run_id
-        || receipt.home_interface_id !== workspace.home_interface_id
+        || !homes.some((home) => home.run_id === receipt.home_run_id && home.interface_id === receipt.home_interface_id)
       )) {
         throw new Error(`Workspace Project receipt '${entry.name}' belongs to another workspace`);
       }
@@ -351,8 +366,14 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
   try {
     const topology = await findWorkspaceTopology(roots, true);
     const expectedRoots = new Set([...receipts.map((receipt) => receipt.root_ee_id), ...receiptedProjectEeIds]);
-    const expectedRuns = new Set(receipts.map((receipt) => receipt.home_run_id));
-    const expectedInterfaces = new Set(receipts.map((receipt) => receipt.home_interface_id));
+    const expectedRuns = new Set([
+      ...receipts.map((receipt) => receipt.home_run_id),
+      ...[...homes, ...switching].map((home) => home.run_id),
+    ]);
+    const expectedInterfaces = new Set([
+      ...receipts.map((receipt) => receipt.home_interface_id),
+      ...[...homes, ...switching].map((home) => home.interface_id),
+    ]);
     const orphanedRoots = topology.operatorSpaceEeIds.filter((eeId) => !expectedRoots.has(eeId));
     const orphanedRuns = topology.homeRunIds.filter((runId) => !expectedRuns.has(runId));
     const orphanedInterfaces = topology.homeInterfaceIds.filter((interfaceId) => !expectedInterfaces.has(interfaceId));
@@ -365,6 +386,8 @@ async function inspectWorkspaceRoots(roots, recoveryErrors) {
   return {
     status: recoveryErrors.length ? "degraded" : receipts.length ? "configured" : "not_configured",
     receipt: receipts[0] ?? null,
+    home: homes.at(-1) ?? null,
+    switching: switching.length > 0,
     errors: recoveryErrors,
   };
 }
@@ -725,17 +748,30 @@ function parseProjectMutationRequest(value) {
     [
       "action", "operationId", "workspace", "parentEeId", "expectedParentDigest", "templateName",
       "name", "goal", "presentation", "eeId", "expectedProjectDigest", "projects", "sourceFolders",
+      "providerInterfaceId", "providerModel", "reasoningEffort", "serviceTier", "expectedHomeRunDigest", "handoffMessages",
     ],
     ["action", "operationId", "workspace"],
     "Workspace project mutation",
   );
-  if (!["create_project", "delete_project", "update_project_presentation"].includes(request.action)) {
+  if (!["create_project", "delete_project", "update_project_presentation", "switch_home_provider"].includes(request.action)) {
     throw new Error("Workspace project mutation has an invalid action");
   }
   const operationId = requiredOperationId(request.operationId);
   const workspace = parseProjectWorkspace(request.workspace);
   let canonical;
-  if (request.action === "create_project") {
+  if (request.action === "switch_home_provider") {
+    canonical = {
+      action: "switch_home_provider",
+      operationId,
+      workspace,
+      providerInterfaceId: requiredId(request.providerInterfaceId, "Home provider interface"),
+      providerModel: requiredHumanText(request.providerModel, "Home provider model", 256),
+      reasoningEffort: optionalText(request.reasoningEffort, "Home reasoning effort", 80),
+      serviceTier: optionalText(request.serviceTier, "Home service tier", 80),
+      expectedHomeRunDigest: requiredDigest(request.expectedHomeRunDigest, "Home run digest"),
+      handoffMessages: parseHandoffMessages(request.handoffMessages ?? []),
+    };
+  } else if (request.action === "create_project") {
     const presentation = exactObject(request.presentation, ["icon", "color"], ["icon", "color"], "Project presentation");
     canonical = {
       action: "create_project",
@@ -793,6 +829,23 @@ function parseProjectMutationRequest(value) {
     ...canonical,
     digest: sha256(Buffer.from(stableJson(canonical))),
   };
+}
+
+function parseHandoffMessages(value) {
+  if (!Array.isArray(value) || value.length > 24) throw new Error("Home handoff must carry at most 24 messages");
+  return value.map((message, index) => {
+    const row = exactObject(message, ["artifactId", "messageId", "role", "text"], ["artifactId", "messageId", "role", "text"], `Home handoff message ${index + 1}`);
+    if (!["user", "assistant"].includes(row.role)) throw new Error(`Home handoff message ${index + 1} has an unsupported role`);
+    if (typeof row.text !== "string" || !row.text.trim() || row.text.length > 16000) {
+      throw new Error(`Home handoff message ${index + 1} must carry text up to 16000 characters`);
+    }
+    return {
+      artifactId: requiredHumanText(row.artifactId, `Home handoff message ${index + 1} artifact`, 1024),
+      messageId: requiredHumanText(row.messageId, `Home handoff message ${index + 1} id`, 1024),
+      role: row.role,
+      text: row.text,
+    };
+  });
 }
 
 function parseProjectWorkspace(value) {
@@ -870,10 +923,11 @@ async function requireConfiguredWorkspace(roots, scope, requested) {
   }
   const receipt = await readReceiptFile(path.join(roots.receiptsRoot, entries[0].name));
   await verifyWorkspaceReceiptIdentity(roots, receipt);
+  const home = (await workspaceHomeChain(roots, receipt)).at(-1);
   if (
     receipt.root_ee_id !== scope.rootEeId
-    || receipt.home_run_id !== scope.homeRunId
-    || receipt.home_interface_id !== scope.homeInterfaceId
+    || home.run_id !== scope.homeRunId
+    || home.interface_id !== scope.homeInterfaceId
     || requested.rootEeId !== scope.rootEeId
     || requested.homeRunId !== scope.homeRunId
     || requested.homeInterfaceId !== scope.homeInterfaceId
@@ -882,6 +936,154 @@ async function requireConfiguredWorkspace(roots, scope, requested) {
     throw new Error("Workspace project mutation identity does not match the configured Home receipt and scope");
   }
   return receipt;
+}
+
+async function workspaceHomeChain(roots, workspaceReceipt) {
+  const homes = [{ run_id: workspaceReceipt.home_run_id, interface_id: workspaceReceipt.home_interface_id }];
+  const switches = [];
+  for (const entry of await workspaceReceiptEntries(roots.projectReceiptsRoot)) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const receipt = await readProjectReceiptFile(path.join(roots.projectReceiptsRoot, entry.name));
+    if (receipt.action === "switch_home_provider" && receipt.root_ee_id === workspaceReceipt.root_ee_id) switches.push(receipt);
+  }
+  for (;;) {
+    const current = homes.at(-1);
+    const next = switches.filter((receipt) => receipt.home_run_id === current.run_id && receipt.home_interface_id === current.interface_id);
+    if (next.length > 1) throw new Error(`Workspace Home '${current.run_id}' was switched to more than one provider`);
+    if (!next.length) break;
+    homes.push({ run_id: next[0].outcome.home_run_id, interface_id: next[0].outcome.home_interface_id });
+    if (homes.length > switches.length + 1) throw new Error("Workspace Home provider switches form a cycle");
+  }
+  if (homes.length !== switches.length + 1) {
+    throw new Error("A Workspace Home provider switch receipt does not continue the configured Home");
+  }
+  return homes;
+}
+
+async function pendingHomeSwitches(roots) {
+  const homes = [];
+  for (const entry of await workspaceReceiptEntries(roots.transactionsRoot)) {
+    if (!entry.isDirectory() || !SAFE_OPERATION_ID.test(entry.name)) continue;
+    const journal = await readJournal(roots, path.join(roots.transactionsRoot, entry.name));
+    if (journal.schema === "octopus.workspace_project_transaction" && journal.receipt.action === "switch_home_provider") {
+      homes.push({ run_id: journal.receipt.outcome.home_run_id, interface_id: journal.receipt.outcome.home_interface_id });
+    }
+  }
+  return homes;
+}
+
+async function planHomeProviderSwitch(roots, scope, request, planOperatorSurface) {
+  if (typeof planOperatorSurface !== "function") {
+    throw new Error("Switching Home's provider requires the operator topology planner");
+  }
+  const sidecar = await readMutableWorkspaceSidecar(roots, scope, request.workspace.expectedHomeSidecarDigest);
+  if (sidecar.value.provider_choice_interface === request.providerInterfaceId) {
+    throw new Error("Home already uses this provider");
+  }
+  const runPath = path.join(roots.runsRoot, `${scope.homeRunId}.json`);
+  const homeRun = await readJson(runPath, "Workspace Home run");
+  if (homeRun.digest !== request.expectedHomeRunDigest) {
+    throw new Error("Home changed before its provider could be switched");
+  }
+  const previous = homeRun.value;
+  const clientState = previous.interface_state?.[scope.homeInterfaceId];
+  if (
+    previous.id !== scope.homeRunId
+    || previous.ee !== scope.rootEeId
+    || clientState?.client_surface_role !== "home"
+    || clientState.client_archive !== undefined
+    || !Array.isArray(previous.checkpoints)
+    || !Array.isArray(previous.active_checkpoints)
+  ) {
+    throw new Error("Workspace Home run identity is no longer valid");
+  }
+  const providerState = previous.interface_state?.[requiredId(clientState.provider_runtime_interface, "Home provider interface")];
+  if (!providerState || typeof providerState !== "object") throw new Error("Workspace Home has no exact provider state");
+  if (providerState.pending_handoff !== undefined && providerState.pending_handoff?.terminal !== true) {
+    throw new Error("Home is still working; stop it before switching provider");
+  }
+  const profile = exactObject(
+    sidecar.value.authoring_profile,
+    ["ee_id", "worker_choice_interface", "door_host_slots", "context_artifact_bindings", "selected_worker_environment_kinds"],
+    ["ee_id", "worker_choice_interface", "door_host_slots"],
+    "Workspace Home authoring profile",
+  );
+  if (profile.ee_id !== scope.rootEeId || profile.worker_choice_interface !== sidecar.value.worker_choice_interface) {
+    throw new Error("Workspace Home authoring profile left its root EE or worker");
+  }
+  const suffix = sha256(Buffer.from(`${request.operationId}\u0000home`)).slice(0, 24);
+  const materialized = { rootEeId: scope.rootEeId, chatId: `home_${suffix}` };
+  const intent = {
+    home: {
+      providerInterfaceId: request.providerInterfaceId,
+      providerModel: request.providerModel,
+      workerInterfaceId: profile.worker_choice_interface,
+      reasoningEffort: request.reasoningEffort,
+      serviceTier: request.serviceTier,
+      doorHostSlots: profile.door_host_slots,
+      contextArtifactBindings: profile.context_artifact_bindings ?? [],
+      selectedWorkerEnvironmentKinds: profile.selected_worker_environment_kinds ?? [],
+    },
+  };
+  const plan = parseHomePlan(await planOperatorSurface({
+    eeInstancesRoot: roots.eeInstancesRoot,
+    request: {
+      chatId: materialized.chatId,
+      cycle: `switch_${suffix}`,
+      providerInterfaceId: intent.home.providerInterfaceId,
+      providerModel: intent.home.providerModel,
+      workerInterfaceId: intent.home.workerInterfaceId,
+      ...(intent.home.reasoningEffort ? { reasoningEffort: intent.home.reasoningEffort } : {}),
+      ...(intent.home.serviceTier ? { serviceTier: intent.home.serviceTier } : {}),
+      ...(Object.keys(intent.home.doorHostSlots).length ? { doorHostSlots: intent.home.doorHostSlots } : {}),
+      ...(intent.home.contextArtifactBindings.length ? { contextArtifactBindings: intent.home.contextArtifactBindings } : {}),
+      ...(intent.home.selectedWorkerEnvironmentKinds.length
+        ? { selectedWorkerEnvironmentKinds: intent.home.selectedWorkerEnvironmentKinds }
+        : {}),
+      eeId: scope.rootEeId,
+      clientSurfaceRole: "home",
+      ...(request.handoffMessages.length
+        ? { handoff: { sourceRunId: scope.homeRunId, messages: request.handoffMessages } }
+        : {}),
+    },
+  }), intent, materialized);
+  if (stableJson(plan.authoringProfile) !== stableJson(profile)) {
+    throw new Error("Home topology planner changed Home's authoring profile");
+  }
+  const planWrites = plan.writes.map((write, index) => parsePlannedWrite(roots, write, index, plan, intent, materialized));
+  const { runWrite, sidecarIndex, voiceContext } = await validatePlannedHomeWrites(roots, plan, planWrites);
+  const planned = plannedHomeSidecar(planWrites[sidecarIndex].content, intent, plan, voiceContext);
+  const sidecarContent = `${JSON.stringify({
+    ...planned,
+    task_authoring_profiles: structuredClone(sidecar.value.task_authoring_profiles),
+    presentation: structuredClone(sidecar.value.presentation),
+  }, null, 2)}\n`;
+  planWrites[sidecarIndex] = { ...planWrites[sidecarIndex], content: sidecarContent, afterDigest: sha256(Buffer.from(sidecarContent)) };
+  const retired = structuredClone(previous);
+  retired.interface_state[scope.homeInterfaceId].client_archive = {
+    schema_version: 1,
+    active_checkpoints: [...previous.active_checkpoints],
+    checkpoints_digest: sha256(Buffer.from(JSON.stringify(previous.checkpoints))),
+    archived_at_ms: Date.now(),
+  };
+  retired.active_checkpoints = [];
+  const writes = [
+    ...planWrites.map((write) => ({ ...write, publishBarrier: false })),
+    projectWrite(runPath, homeRun.digest, `${JSON.stringify(retired)}\n`, `run:${scope.homeRunId}`, false),
+    { ...runWrite, publishBarrier: true },
+  ];
+  if (new Set(writes.map((write) => write.destination)).size !== writes.length) {
+    throw new Error("Home provider switch repeats a destination");
+  }
+  return {
+    outcome: {
+      action: "switch_home_provider",
+      homeRunId: plan.runId,
+      homeInterfaceId: plan.chatInterfaceId,
+      providerInterfaceId: request.providerInterfaceId,
+    },
+    writes,
+  };
 }
 
 async function planProjectCreate(roots, scope, request, planOperatorSurface) {
@@ -1610,14 +1812,7 @@ async function workspaceWrites(roots, request, materialized, validatedPlan, proj
   const planWrites = validatedPlan.writes.map((write, index) => (
     parsePlannedWrite(roots, write, index, validatedPlan, request, materialized)
   ));
-  const runPath = path.join(roots.runsRoot, `${validatedPlan.runId}.json`);
-  const runIndexes = planWrites.flatMap((write, index) => write.destination === runPath ? [index] : []);
-  if (runIndexes.length !== 1) throw new Error("Home topology plan must publish exactly one run record");
-  const runs = validatePlannedHomeRuns(roots, validatedPlan, planWrites, JSON.parse(planWrites[runIndexes[0]].content));
-  await validatePlannedHomeOwnership(roots, validatedPlan, planWrites, runs);
-  const sidecarPath = path.join(roots.interfaceRoot, validatedPlan.chatInterfaceId, "octopus_os.json");
-  const sidecarIndex = planWrites.findIndex((write) => write.destination === sidecarPath);
-  if (sidecarIndex < 0) throw new Error("Home topology plan omitted its Octopus OS sidecar");
+  const { runWrite, sidecarIndex, voiceContext } = await validatePlannedHomeWrites(roots, validatedPlan, planWrites);
   planWrites[sidecarIndex] = {
     ...planWrites[sidecarIndex],
     content: workspaceHomeSidecar(
@@ -1627,25 +1822,10 @@ async function workspaceWrites(roots, request, materialized, validatedPlan, proj
       validatedPlan,
       projectProfiles,
       agentPlans,
-      runs.find((run) => run.id === validatedPlan.runId).interface_state?.[validatedPlan.chatInterfaceId]?.voice_context,
+      voiceContext,
     ),
   };
   planWrites[sidecarIndex].afterDigest = sha256(Buffer.from(planWrites[sidecarIndex].content));
-  for (const interfaceId of [
-    validatedPlan.chatInterfaceId,
-    validatedPlan.modelInterfaceId,
-    validatedPlan.workerInterfaceId,
-  ]) {
-    const descriptor = path.join(roots.interfaceRoot, interfaceId, "interface.json");
-    if (!planWrites.some((write) => write.destination === descriptor)) {
-      throw new Error(`Home topology plan omitted exact interface descriptor '${interfaceId}'`);
-    }
-  }
-  const workerPolicy = path.join(roots.interfaceRoot, validatedPlan.workerInterfaceId, "policy.json");
-  if (!planWrites.some((write) => write.destination === workerPolicy)) {
-    throw new Error("Home topology plan omitted its exact worker policy");
-  }
-  const runWrite = planWrites.splice(runIndexes[0], 1)[0];
   const eeWrites = materialized.eeWrites.map((write) => {
     const content = eeDocument(write);
     return {
@@ -1688,6 +1868,34 @@ async function workspaceWrites(roots, request, materialized, validatedPlan, proj
     destinations.add(write.destination);
   }
   return writes;
+}
+
+async function validatePlannedHomeWrites(roots, plan, planWrites) {
+  const runPath = path.join(roots.runsRoot, `${plan.runId}.json`);
+  const runIndexes = planWrites.flatMap((write, index) => write.destination === runPath ? [index] : []);
+  if (runIndexes.length !== 1) throw new Error("Home topology plan must publish exactly one run record");
+  const runs = validatePlannedHomeRuns(roots, plan, planWrites, JSON.parse(planWrites[runIndexes[0]].content));
+  await validatePlannedHomeOwnership(roots, plan, planWrites, runs);
+  const sidecarPath = path.join(roots.interfaceRoot, plan.chatInterfaceId, "octopus_os.json");
+  if (!planWrites.some((write) => write.destination === sidecarPath)) {
+    throw new Error("Home topology plan omitted its Octopus OS sidecar");
+  }
+  for (const interfaceId of [plan.chatInterfaceId, plan.modelInterfaceId, plan.workerInterfaceId]) {
+    const descriptor = path.join(roots.interfaceRoot, interfaceId, "interface.json");
+    if (!planWrites.some((write) => write.destination === descriptor)) {
+      throw new Error(`Home topology plan omitted exact interface descriptor '${interfaceId}'`);
+    }
+  }
+  const workerPolicy = path.join(roots.interfaceRoot, plan.workerInterfaceId, "policy.json");
+  if (!planWrites.some((write) => write.destination === workerPolicy)) {
+    throw new Error("Home topology plan omitted its exact worker policy");
+  }
+  const runWrite = planWrites.splice(runIndexes[0], 1)[0];
+  return {
+    runWrite,
+    sidecarIndex: planWrites.findIndex((write) => write.destination === sidecarPath),
+    voiceContext: runs.find((run) => run.id === plan.runId).interface_state?.[plan.chatInterfaceId]?.voice_context,
+  };
 }
 
 async function admitWorkspaceAgentWorkers(roots, writes, agentPlans) {
@@ -2173,6 +2381,30 @@ function validateHomeRunRecord(record, plan, request, materialized) {
 }
 
 function workspaceHomeSidecar(content, request, materialized, plan, projectProfiles, agentPlans, voiceContext) {
+  const sidecar = plannedHomeSidecar(content, request, plan, voiceContext);
+  const taskAuthoringProfiles = [{ key: "root" }, ...request.projects].map((project) => {
+    const profile = projectProfiles.get(project.key);
+    if (!profile) throw new Error(`Workspace Project '${project.key}' has no verified authoring profile`);
+    return structuredClone(profile);
+  });
+  taskAuthoringProfiles.push(...agentPlans.map((agent) => structuredClone(agent.profile)));
+  const presentation = {
+    name: request.root.name,
+    projects: request.projects.map((project) => ({
+      ee_id: requiredMapValue(materialized.projectEeIds, project.key),
+      name: project.name,
+      icon: project.presentation.icon,
+      color: project.presentation.color,
+    })),
+  };
+  return `${JSON.stringify({
+    ...sidecar,
+    task_authoring_profiles: taskAuthoringProfiles,
+    presentation,
+  }, null, 2)}\n`;
+}
+
+function plannedHomeSidecar(content, request, plan, voiceContext) {
   let sidecar;
   try {
     sidecar = JSON.parse(content);
@@ -2209,26 +2441,7 @@ function workspaceHomeSidecar(content, request, materialized, plan, projectProfi
     || voiceContext !== undefined && stableJson(sidecar.voice_context) !== stableJson(voiceContext)) {
     throw new Error("Home sidecar voice context differs from its exact execution Run");
   }
-  const taskAuthoringProfiles = [{ key: "root" }, ...request.projects].map((project) => {
-    const profile = projectProfiles.get(project.key);
-    if (!profile) throw new Error(`Workspace Project '${project.key}' has no verified authoring profile`);
-    return structuredClone(profile);
-  });
-  taskAuthoringProfiles.push(...agentPlans.map((agent) => structuredClone(agent.profile)));
-  const presentation = {
-    name: request.root.name,
-    projects: request.projects.map((project) => ({
-      ee_id: requiredMapValue(materialized.projectEeIds, project.key),
-      name: project.name,
-      icon: project.presentation.icon,
-      color: project.presentation.color,
-    })),
-  };
-  return `${JSON.stringify({
-    ...sidecar,
-    task_authoring_profiles: taskAuthoringProfiles,
-    presentation,
-  }, null, 2)}\n`;
+  return sidecar;
 }
 
 function eeDocument(write) {
@@ -2282,7 +2495,13 @@ function workspaceReceipt(request, materialized, plan, writes) {
 }
 
 function projectMutationReceipt(request, planned) {
-  const outcome = planned.outcome.action === "create_project"
+  const outcome = planned.outcome.action === "switch_home_provider"
+    ? {
+        home_run_id: planned.outcome.homeRunId,
+        home_interface_id: planned.outcome.homeInterfaceId,
+        provider_interface_id: planned.outcome.providerInterfaceId,
+      }
+    : planned.outcome.action === "create_project"
     ? {
         ee_id: planned.outcome.eeId,
         parent_ee_id: planned.outcome.parentEeId,
@@ -4054,14 +4273,15 @@ function parseProjectReceipt(value) {
   if (receipt.schema !== "octopus.workspace_project_receipt" || receipt.schema_version !== 1) {
     throw new Error("Workspace Project receipt has an unsupported schema");
   }
-  if (!["create_project", "delete_project", "update_project_presentation"].includes(receipt.action)) {
+  if (!["create_project", "delete_project", "update_project_presentation", "switch_home_provider"].includes(receipt.action)) {
     throw new Error("Workspace Project receipt has an invalid action");
   }
   if (receipt.completed_at && !Number.isFinite(Date.parse(receipt.completed_at))) {
     throw new Error("Workspace Project receipt has an invalid completion time");
   }
   if (!Array.isArray(receipt.writes) || !receipt.writes.length
-    || (receipt.action !== "update_project_presentation" && receipt.writes.length !== 3)) {
+    || (receipt.action === "switch_home_provider" ? receipt.writes.length < 3
+      : receipt.action !== "update_project_presentation" && receipt.writes.length !== 3)) {
     throw new Error("Workspace Project receipt has an invalid write count");
   }
   const writes = receipt.writes.map((entry, index) => {
@@ -4087,7 +4307,14 @@ function parseProjectReceipt(value) {
   if (writes.filter((write) => write.publish_barrier).length !== 1) {
     throw new Error("Workspace Project receipt must have exactly one publish barrier");
   }
-  const outcomeValue = receipt.action === "create_project"
+  const outcomeValue = receipt.action === "switch_home_provider"
+    ? exactObject(
+        receipt.outcome,
+        ["home_run_id", "home_interface_id", "provider_interface_id"],
+        ["home_run_id", "home_interface_id", "provider_interface_id"],
+        "Workspace Home provider switch outcome",
+      )
+    : receipt.action === "create_project"
     ? exactObject(
         receipt.outcome,
         ["ee_id", "parent_ee_id", "template_name", "goal"],
@@ -4102,7 +4329,13 @@ function parseProjectReceipt(value) {
           ["project_ee_ids"],
           "Workspace Project presentation outcome",
         );
-  const outcome = receipt.action === "create_project"
+  const outcome = receipt.action === "switch_home_provider"
+    ? {
+        home_run_id: requiredId(outcomeValue.home_run_id, "Workspace Home switch run"),
+        home_interface_id: requiredId(outcomeValue.home_interface_id, "Workspace Home switch interface"),
+        provider_interface_id: requiredId(outcomeValue.provider_interface_id, "Workspace Home switch provider"),
+      }
+    : receipt.action === "create_project"
     ? {
         ee_id: requiredId(outcomeValue.ee_id, "Workspace Project receipt EE"),
         parent_ee_id: requiredId(outcomeValue.parent_ee_id, "Workspace Project receipt parent EE"),
@@ -4118,7 +4351,7 @@ function parseProjectReceipt(value) {
           ),
         };
   const barrier = writes.find((write) => write.publish_barrier);
-  if (receipt.action === "create_project" && writes.some((write) => write.digest === null)) {
+  if (["create_project", "switch_home_provider"].includes(receipt.action) && writes.some((write) => write.digest === null)) {
     throw new Error("Workspace Project creation receipt cannot contain a deletion");
   }
   if (receipt.action === "delete_project" && barrier?.digest !== null) {
@@ -4383,6 +4616,20 @@ function verifyProjectReceiptContract(roots, receipt) {
   for (const write of receipt.writes) allowedDestinationRoot(roots, write.path);
   const sidecarPath = path.join(roots.interfaceRoot, receipt.home_interface_id, "octopus_os.json");
   const barrier = receipt.writes.find((write) => write.publish_barrier);
+  if (receipt.action === "switch_home_provider") {
+    const previousRunPath = path.join(roots.runsRoot, `${receipt.home_run_id}.json`);
+    const nextSidecarPath = path.join(roots.interfaceRoot, receipt.outcome.home_interface_id, "octopus_os.json");
+    if (
+      receipt.outcome.home_run_id === receipt.home_run_id
+      || barrier?.path !== path.join(roots.runsRoot, `${receipt.outcome.home_run_id}.json`)
+      || barrier.tag !== `run:${receipt.outcome.home_run_id}`
+      || !receipt.writes.some((write) => write.path === previousRunPath && write.tag === `run:${receipt.home_run_id}`)
+      || !receipt.writes.some((write) => write.path === nextSidecarPath)
+    ) {
+      throw new Error("Workspace Home provider switch receipt does not prove its retired and new Home");
+    }
+    return;
+  }
   if (receipt.action === "update_project_presentation") {
     if (barrier?.path !== sidecarPath) {
       throw new Error("Workspace Project presentation receipt does not publish the Home sidecar");
@@ -4586,6 +4833,20 @@ function receiptOutcome(receipt, changed) {
 }
 
 function projectReceiptOutcome(receipt, changed) {
+  if (receipt.action === "switch_home_provider") {
+    return {
+      action: receipt.action,
+      operationId: receipt.operation_id,
+      rootEeId: receipt.root_ee_id,
+      previousHomeRunId: receipt.home_run_id,
+      previousHomeInterfaceId: receipt.home_interface_id,
+      homeRunId: receipt.outcome.home_run_id,
+      homeInterfaceId: receipt.outcome.home_interface_id,
+      providerInterfaceId: receipt.outcome.provider_interface_id,
+      receiptDigest: sha256(Buffer.from(stableJson(receipt))),
+      changed,
+    };
+  }
   const projectOutcome = receipt.action === "create_project"
     ? {
         eeId: receipt.outcome.ee_id,

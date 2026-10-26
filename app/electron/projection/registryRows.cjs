@@ -353,7 +353,7 @@ async function readRunRecords(runRecordsRoot, warnings = []) {
       record_digest: recordDigest,
       interface_state: objectOrEmpty(record.interface_state),
       archived_client_interface_ids: Object.entries(objectOrEmpty(record.interface_state))
-        .filter(([, state]) => state?.client_surface_role === "task" && state.client_archive !== undefined)
+        .filter(([, state]) => ["task", "home"].includes(state?.client_surface_role) && state.client_archive !== undefined)
         .map(([interfaceId]) => interfaceId),
       checkpoints,
     });

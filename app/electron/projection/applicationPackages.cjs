@@ -463,6 +463,7 @@ function taskBaseAuthoringProfile(scope, runProjection, taskProfile) {
     ...scope.clientRuns.flatMap((candidate) => {
         const profile = candidate?.authoring_profile;
         return stringValue(candidate?.surface_role) === "home"
+          && !candidate?.archived
           && stringValue(profile?.ee_id) === eeId
           && stringValue(profile?.worker_choice_interface) === worker
           ? [profile]

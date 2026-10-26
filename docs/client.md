@@ -40,6 +40,10 @@ split panes, so a conversation and its evidence can remain visible together.
 ### Home: conversation, Activity, and voice
 
 Home presents one continuing run. Use the composer for text and attachments.
+When more than one provider is installed for Home, the composer names the
+current one. Choosing another provider starts a new Home conversation on it,
+with the same instructions, tools and Projects; the earlier conversation is
+archived and stays readable. New tasks then inherit the new provider.
 Each message you send from Home also carries the client's snapshot of what
 you can see - tasks with their status and last reply, triggers, projects and
 Agents - inside the same message artifact, so Home can answer and propose

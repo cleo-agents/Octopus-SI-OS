@@ -46,7 +46,7 @@ async function setupEnvironment(environment, options = {}) {
       return {
         status: "configured", changed: false, home: environment.home,
         workspace, setup: current,
-        runtime: await environment.status({ interfaceId: workspace.receipt.home_interface_id }),
+        runtime: await environment.status({ interfaceId: workspace.home.interface_id }),
       };
     }
     if (current) throw new Error("The completed client setup has no matching configured Home. Repair its evidence before continuing.");
@@ -70,7 +70,7 @@ async function finishSetup(environment, store, operationId, options) {
     || workspace.receipt.operation_id !== operationId || workspace.receipt.request_digest !== setup.plan.workspace.request_digest) {
     throw new Error("Setup did not produce matching client and workspace receipts.");
   }
-  const runtime = await environment.start({ requireEndpoint: true, interfaceId: workspace.receipt.home_interface_id,
+  const runtime = await environment.start({ requireEndpoint: true, interfaceId: workspace.home.interface_id,
     timeoutMs: options.timeoutMs, signal: options.signal, onProgress: options.onProgress });
   return { status: "configured", changed: true, home: environment.home, workspace, setup, runtime };
 }
@@ -146,7 +146,7 @@ function createSetupOwners(environment, options = {}) {
       || state.receipt.request_digest !== plan.workspace.request_digest) return null;
     const references = [setupReference("workspace_receipt", context.operationId, state.receipt)];
     for (const entry of plan.workspace.project_defaults) {
-      const context = await projectDefaultContext(getProjection(), entry, state.receipt);
+      const context = await projectDefaultContext(getProjection(), entry, state);
       if (!context.proven) return null;
       references.push(projectDefaultReference(entry, context));
     }
@@ -213,7 +213,7 @@ function createSetupOwners(environment, options = {}) {
             || state.receipt.request_digest !== plan.workspace.request_digest) throw new Error("Another setup already owns this Home, or workspace evidence is degraded.");
           const configured = await readWorkspaceSetupState(roots);
           for (const entry of plan.workspace.project_defaults) {
-            const target = await projectDefaultContext(getProjection(), entry, configured.receipt);
+            const target = await projectDefaultContext(getProjection(), entry, configured);
             if (target.proven) continue;
             const request = entry.product_kind === "application"
               ? { action: "configure_application", applicationId: entry.product_id,
@@ -250,11 +250,11 @@ function createSetupOwners(environment, options = {}) {
   };
 }
 
-async function projectDefaultContext(store, entry, receipt) {
+async function projectDefaultContext(store, entry, { receipt, home }) {
   store.invalidate();
   const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
-  if (scope.status !== "ready" || scope.root_ee_id !== receipt.root_ee_id || scope.home_run_id !== receipt.home_run_id
-    || scope.home_interface_id !== receipt.home_interface_id) throw new Error("Project defaults require the exact configured Home scope.");
+  if (scope.status !== "ready" || scope.root_ee_id !== receipt.root_ee_id || scope.home_run_id !== home?.run_id
+    || scope.home_interface_id !== home?.interface_id) throw new Error("Project defaults require the exact configured Home scope.");
   const projectIds = new Map(receipt.project_ee_ids.map((row) => [row.key, row.ee_id]));
   const ids = [receipt.root_ee_id, ...entry.project_keys.map((key) => {
     if (!projectIds.has(key)) throw new Error(`Project default references unknown Project '${key}'.`);
