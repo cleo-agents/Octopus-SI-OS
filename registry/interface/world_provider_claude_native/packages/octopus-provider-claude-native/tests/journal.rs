@@ -63,3 +63,19 @@ fn queued_context_waits_for_the_next_turn_across_lives() {
     journal.take_queued_context("run_a", &[transcript]).unwrap();
     assert!(Journal::open(dir.path(), 64 * 1024).unwrap().queued_context("run_a").is_empty());
 }
+
+#[test]
+fn queued_context_is_bounded_and_a_refused_entry_is_not_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut journal = Journal::open(dir.path(), 64 * 1024).unwrap();
+    let entry = |index: usize| QueuedContext { artifact: serde_json::json!({"id": format!("call:{index}")}), text: "said".into() };
+    for index in 0..16 {
+        journal.queue_context("run_a", entry(index)).unwrap();
+    }
+    assert!(journal.queue_context("run_a", entry(16)).is_err());
+    assert_eq!(journal.queued_context("run_a").len(), 16);
+    let mut small = Journal::open(tempfile::tempdir().unwrap().path(), 256).unwrap();
+    let large = QueuedContext { artifact: serde_json::json!({"id": "call:large"}), text: "x".repeat(1024) };
+    assert!(small.queue_context("run_a", large).is_err());
+    assert!(small.queued_context("run_a").is_empty());
+}

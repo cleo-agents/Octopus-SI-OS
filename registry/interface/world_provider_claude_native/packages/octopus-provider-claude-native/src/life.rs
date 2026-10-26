@@ -465,7 +465,9 @@ impl Provider {
             Ok(decoded) => decoded.prompt_text(),
             Err(error) => return self.hand_failure(handoff, None, None, &TurnFailure::new("input_unreadable", error)).await,
         };
-        self.journal.queue_context(run, QueuedContext { artifact: source.clone(), text })?;
+        if let Err(error) = self.journal.queue_context(run, QueuedContext { artifact: source.clone(), text }) {
+            return self.hand_failure(handoff, None, None, &TurnFailure::new("context_not_queued", error)).await;
+        }
         let receipt = json!({"phase": "context_queued", "source_artifact": source, "queued": true, "turn_triggered": false});
         self.hand_terminal(handoff, CONTEXT_UPDATED_LABEL, None, None, receipt).await
     }

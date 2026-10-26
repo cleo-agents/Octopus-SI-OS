@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 const JOURNAL_FILE: &str = "claude-native-journal.json";
 const JOURNAL_VERSION: u32 = 1;
 const HANDLED_CONTROLS_KEPT: usize = 512;
+const QUEUED_CONTEXT_KEPT: usize = 16;
 
 /// What this life remembers about one run between turns and across restarts:
 /// the Claude session that continues the run's conversation, and the turn
@@ -127,13 +128,25 @@ impl Journal {
         self.state.runs.get(run).map(|entry| entry.queued_context.clone()).unwrap_or_default()
     }
 
+    /// Queues context for the run's next turn. A run holds at most
+    /// `QUEUED_CONTEXT_KEPT` entries; a further one is refused, never
+    /// dropped, and a refused save leaves the journal as it was.
     pub fn queue_context(&mut self, run: &str, context: QueuedContext) -> Result<(), String> {
         let entry = self.state.runs.entry(run.to_string()).or_default();
         if entry.queued_context.iter().any(|queued| queued.artifact == context.artifact) {
             return Ok(());
         }
+        if entry.queued_context.len() >= QUEUED_CONTEXT_KEPT {
+            return Err(format!("run '{run}' already holds {QUEUED_CONTEXT_KEPT} queued context inputs for its next turn"));
+        }
         entry.queued_context.push(context);
-        self.save()
+        let saved = self.save();
+        if saved.is_err() {
+            if let Some(entry) = self.state.runs.get_mut(run) {
+                entry.queued_context.pop();
+            }
+        }
+        saved
     }
 
     /// Forgets the queued context a started turn delivered.
