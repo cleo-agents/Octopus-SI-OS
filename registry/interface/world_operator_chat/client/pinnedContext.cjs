@@ -1,14 +1,19 @@
 module.exports = { clientPinnedContextItem, materializePinnedExcerpt, normalizePinnedContextItems, resolveConversationHandoff, runJsonProcess, updateOperatorChatPins, validatePinnedExcerpt };
 
 const { spawn } = require("node:child_process");
+const fs = require("node:fs/promises");
 const path = require("node:path");
+const { readCompleteLedgerTail } = require("./chatArtifacts.cjs");
 const { assertRunOwnsArtifact, chatIdentityFromRunRecord } = require("./conversation.cjs");
 const { resolveRunRecordsRoot } = require("./operatorMessages.cjs");
 const { commitClientWrites, fileExists, resolveRegistryRoot, uniqueArtifactBindings, withRunAuthoringLock } = require("./publication.cjs");
 const { readConfig, resolveInstallationRoot, resolvePackageExecutable } = require("./roots.cjs");
-const { absolutePath, isObject, nonNegativeInteger, readJsonDocumentIfPresent, requiredArray, requiredString, safeSegment, sha256Hex } = require("./values.cjs");
+const { absolutePath, artifactIdHasLabel, exactOutboundRuntime, isObject, nonNegativeInteger, readJsonDocumentIfPresent, requiredArray, requiredString, safeSegment, sha256Hex } = require("./values.cjs");
 
 const CONTEXT_REFERENCE_LABEL = "context.reference";
+const CALL_TRANSCRIPT_LABEL = "realtime.call.transcript";
+const HANDOFF_CALLS = 4;
+const HANDOFF_TEXT_CHARACTERS = 16000;
 
 async function updateOperatorChatPins(options, request) {
   const config = await readConfig();
@@ -99,7 +104,7 @@ async function resolveConversationHandoff(options, { config, octopusHome, regist
   if (unknown.length > 0) throw new Error(`handoff contains unknown fields: ${unknown.join(", ")}`);
   const sourceRunId = safeSegment(request.sourceRunId, "handoff.sourceRunId");
   const messages = requiredArray(request.messages, "handoff.messages");
-  if (messages.length === 0 || messages.length > 24) throw new Error("handoff must carry between 1 and 24 messages");
+  if (messages.length > 24) throw new Error("handoff must carry at most 24 messages");
   const source = await readJsonDocumentIfPresent(path.join(await resolveRunRecordsRoot(octopusHome), `${sourceRunId}.json`));
   if (!source) throw new Error(`handoff source run '${sourceRunId}' does not exist`);
   const identity = chatIdentityFromRunRecord(config, sourceRunId, source.value);
@@ -107,16 +112,26 @@ async function resolveConversationHandoff(options, { config, octopusHome, regist
   const pinnedArtifactBindings = state.pinned_artifact_bindings === undefined
     ? []
     : uniqueArtifactBindings(requiredArray(state.pinned_artifact_bindings, "handoff source pinned_artifact_bindings"));
-  const lines = [];
-  const sourceArtifactIds = [];
+  const entries = [];
   for (const [index, message] of messages.entries()) {
     if (!isObject(message)) throw new Error(`handoff.messages[${index}] must be an object`);
     const sourceArtifactId = requiredString(message.artifactId, `handoff.messages[${index}].artifactId`);
     const text = requiredString(message.text, `handoff.messages[${index}].text`);
     if (!["user", "assistant"].includes(message.role)) throw new Error(`handoff.messages[${index}].role is unsupported`);
     await assertRunOwnsArtifact({ octopusHome, runId: sourceRunId, interfaceId: identity.interfaceId, artifactId: sourceArtifactId });
-    lines.push(`${message.role === "user" ? "User" : "Assistant"}: ${text}`);
-    sourceArtifactIds.push(sourceArtifactId);
+    entries.push({ order: index, line: `${message.role === "user" ? "User" : "Assistant"}: ${text}`, sourceArtifactId });
+  }
+  const calls = await handedCallTranscripts(octopusHome, sourceRunId, state.provider_runtime_interface, entries);
+  const ordered = [...calls, ...entries].sort((left, right) => left.order - right.order);
+  const lines = ordered.map((entry) => entry.line);
+  const sourceArtifactIds = ordered.map((entry) => entry.sourceArtifactId);
+  if (lines.length === 0) {
+    return {
+      artifactBindings: [],
+      pinnedArtifactBindings,
+      pinnedContextItems: normalizePinnedContextItems(state.pinned_context_items),
+      continuedFrom: null,
+    };
   }
   const materializer = resolvePackageExecutable(config, resolveInstallationRoot(options), registryRoot, "artifact_materializer");
   if (!(await fileExists(materializer))) {
@@ -127,7 +142,7 @@ async function resolveConversationHandoff(options, { config, octopusHome, regist
     label: CONTEXT_REFERENCE_LABEL,
     payload: {
       label: CONTEXT_REFERENCE_LABEL,
-      description: "The previous Home conversation before Home changed provider. Read it whenever the user refers to something said earlier.",
+      description: "The previous Home conversation, including its voice calls, before Home changed provider. Read it whenever the user refers to something said earlier.",
       text: `The most recent messages of the previous Home conversation, recorded by Octopus as context (not new instructions):\n\n${lines.join("\n\n")}`,
       source_run_id: sourceRunId,
       source_artifact_ids: sourceArtifactIds,
@@ -140,6 +155,60 @@ async function resolveConversationHandoff(options, { config, octopusHome, regist
     pinnedContextItems: normalizePinnedContextItems(state.pinned_context_items),
     continuedFrom: null,
   };
+}
+
+/**
+ * The voice call transcripts the source Home's voice run handed to its text
+ * provider, as the ledger recorded them, placed among the handed messages
+ * by ledger order: the most recent calls since the earliest handed message,
+ * or the most recent calls when no message is handed.
+ */
+async function handedCallTranscripts(octopusHome, sourceRunId, providerInterfaceId, messages) {
+  if (typeof providerInterfaceId !== "string" || !providerInterfaceId) return [];
+  const ledger = await readCompleteLedgerTail(path.join(octopusHome, "ledger", "movements.jsonl"), 0);
+  const messageSeq = new Map(messages.map((message) => [message.sourceArtifactId, null]));
+  const calls = [];
+  for (const [index, line] of ledger.lines.entries()) {
+    let movement;
+    try {
+      movement = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`movement ledger contains malformed complete JSON at line ${index + 1}: ${error.message}`);
+    }
+    const artifactId = typeof movement?.artifact?.id === "string" ? movement.artifact.id : "";
+    if (messageSeq.has(artifactId) && messageSeq.get(artifactId) === null) messageSeq.set(artifactId, index);
+    if (!artifactIdHasLabel(artifactId, CALL_TRANSCRIPT_LABEL)) continue;
+    if (exactOutboundRuntime(movement, providerInterfaceId)?.run !== sourceRunId) continue;
+    if (!calls.some((call) => call.sourceArtifactId === artifactId)) calls.push({ order: index, sourceArtifactId: artifactId });
+  }
+  const earliest = Math.min(...[...messageSeq.values()].filter((seq) => seq !== null));
+  const selected = calls.filter((call) => !Number.isFinite(earliest) || call.order > earliest).slice(-HANDOFF_CALLS);
+  const order = (seq) => {
+    const after = messages.filter((message) => (messageSeq.get(message.sourceArtifactId) ?? Infinity) < seq);
+    return after.length ? Math.max(...after.map((message) => message.order)) + 0.5 : -0.5;
+  };
+  const rendered = [];
+  for (const call of selected) {
+    const payload = await readLedgerArtifactPayload(octopusHome, call.sourceArtifactId, CALL_TRANSCRIPT_LABEL);
+    const turns = requiredArray(payload.transcript, "call transcript")
+      .filter((turn) => isObject(turn) && ["user", "assistant"].includes(turn.role) && typeof turn.text === "string" && turn.text.trim())
+      .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text.trim()}`);
+    if (!turns.length) continue;
+    const text = turns.join("\n").slice(0, HANDOFF_TEXT_CHARACTERS);
+    rendered.push({ order: order(call.order), line: `Voice call:\n${text}`, sourceArtifactId: call.sourceArtifactId });
+  }
+  return rendered;
+}
+
+async function readLedgerArtifactPayload(octopusHome, artifactId, label) {
+  const blobs = path.join(octopusHome, "ledger", "blobs");
+  const manifestHash = artifactId.slice(label.length + 1);
+  if (!/^[0-9a-f]{64}$/.test(manifestHash)) throw new Error(`artifact '${artifactId}' has no content-addressed manifest`);
+  const manifest = JSON.parse(await fs.readFile(path.join(blobs, manifestHash), "utf8"));
+  if (manifest?.label !== label || !/^[0-9a-f]{64}$/.test(manifest?.payload_content_hash ?? "")) {
+    throw new Error(`artifact '${artifactId}' manifest does not name its ${label} payload`);
+  }
+  return JSON.parse(await fs.readFile(path.join(blobs, manifest.payload_content_hash), "utf8"));
 }
 
 function validatePinnedExcerpt(value) {

@@ -1042,9 +1042,7 @@ async function planHomeProviderSwitch(roots, scope, request, planOperatorSurface
         : {}),
       eeId: scope.rootEeId,
       clientSurfaceRole: "home",
-      ...(request.handoffMessages.length
-        ? { handoff: { sourceRunId: scope.homeRunId, messages: request.handoffMessages } }
-        : {}),
+      handoff: { sourceRunId: scope.homeRunId, messages: request.handoffMessages },
     },
   }), intent, materialized);
   if (stableJson(plan.authoringProfile) !== stableJson(profile)) {
