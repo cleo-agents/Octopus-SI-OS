@@ -38,7 +38,7 @@ pub(crate) async fn wait(
         for own in batch {
             if own.metadata()?.runtime.as_ref().is_none_or(|runtime| runtime.run != *run) { continue; }
             let input = reader.envelope(&own)?;
-            let Some(message) = crate::handler::admitted_peer_message(&input, ctx.resolved_interface_descriptor()?.interface_driver_config.as_ref().and_then(|c| c.private_config.get("input_intake"))).map_err(|error| error.to_string())? else { continue; };
+            let Some(message) = crate::handler::admitted_peer_message(&input, ctx.resolved_interface_descriptor()?.interface_driver_config.as_ref().map(|c| &c.private_config)).map_err(|error| error.to_string())? else { continue; };
             let label = input.read_artifact_manifest().map_err(|error| error.to_string())?.label;
             if message.action != crate::run_affordances::PeerAction::Queue { continue; }
             if label != crate::run_affordances::PEER_MESSAGE_LABEL && label != octopus_operator_chat_client::input_intake::INPUT_INTAKE_LABEL

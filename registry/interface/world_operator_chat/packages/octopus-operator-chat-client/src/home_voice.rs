@@ -25,8 +25,12 @@ pub(super) struct PlannedVoice {
     pub writer: String,
     inputs: Vec<String>,
     outputs: Vec<String>,
+    delivered: Vec<String>,
     retained: bool,
 }
+
+const DELEGATION_LABEL: &str = "realtime.delegation";
+const CALL_TRANSCRIPT_LABEL: &str = "realtime.call.transcript";
 
 impl PlannedVoice {
     pub fn interfaces(&self) -> [&String; 4] {
@@ -122,13 +126,19 @@ pub(super) fn select(
     ]
     .iter()
     .all(|label| inputs.contains(&label.to_string()))
-        || !outputs.iter().any(|label| label == "realtime.delegation")
+        || !outputs.iter().any(|label| label == DELEGATION_LABEL)
     {
         return Err(
             "Home voice contract lacks its explicit control or delegation vocabulary".into(),
         );
     }
-    outputs.retain(|label| label != "realtime.delegation");
+    let mut delivered = vec![DELEGATION_LABEL.to_string()];
+    if outputs.iter().any(|label| label == CALL_TRANSCRIPT_LABEL)
+        && declares_context_input(root, &identity.provider_choice_interface, CALL_TRANSCRIPT_LABEL)?
+    {
+        delivered.push(CALL_TRANSCRIPT_LABEL.into());
+    }
+    outputs.retain(|label| label != DELEGATION_LABEL && label != CALL_TRANSCRIPT_LABEL);
     Ok(Some(PlannedVoice {
         context,
         source: format!(
@@ -145,8 +155,52 @@ pub(super) fn select(
         ),
         inputs,
         outputs,
+        delivered,
         retained: existing.is_some(),
     }))
+}
+
+/// Whether Home's text provider declares `label` as an input that joins its
+/// conversation as context without starting a turn.
+fn declares_context_input(root: &Path, provider: &str, label: &str) -> Result<bool, String> {
+    let descriptor = load_interface_descriptor(root, provider)?;
+    Ok(descriptor
+        .interface_driver_config
+        .as_ref()
+        .and_then(|config| config.private_config.get("input_messages"))
+        .and_then(|messages| messages.get(label))
+        .and_then(|contract| contract.get("disposition"))
+        == Some(&json!("context")))
+}
+
+/// The labels a retained Home's voice run hands to Home's text provider, as
+/// that run was authored.
+fn retained_delivery(path: &Path, voice: &PlannedVoice) -> Result<Vec<String>, String> {
+    let value: Value = serde_json::from_slice(
+        &std::fs::read(path).map_err(|e| format!("declared Home voice Run is unreadable: {e}"))?,
+    )
+    .map_err(|e| e.to_string())?;
+    let routes = value["interface_state"][&voice.context.provider_id]["run_authoring_binding"]["checkpoints"]
+        .as_array()
+        .ok_or("Home voice Run has no authored topology")?
+        .iter()
+        .filter(|cp| {
+            cp["role"] == "provider_interface_output"
+                && cp["interface_binding"]["interface"] == json!(voice.context.provider_id)
+        })
+        .collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for route in routes {
+        let [name]: [String; 1] = serde_json::from_value(route["interface_binding"]["config"]["artifact_policy"]["names"].clone())
+            .map_err(|e| format!("Home voice delegation route has no exact name: {e}"))?;
+        names.push(name);
+    }
+    if names.first().map(String::as_str) != Some(DELEGATION_LABEL)
+        || names.iter().any(|name| name != DELEGATION_LABEL && name != CALL_TRANSCRIPT_LABEL)
+    {
+        return Err("Home voice delegation route carries undeclared labels; explicit topology repair is required".into());
+    }
+    Ok(names)
 }
 
 pub(super) fn plan_descriptors(
@@ -333,6 +387,19 @@ pub(super) fn wire(
     let Some(voice) = &identity.voice else {
         return Ok((content, Vec::new()));
     };
+    let root = require_absolute(
+        "run_records_root",
+        request
+            .run_records_root
+            .as_deref()
+            .ok_or("Home voice needs run_records_root")?,
+    )?;
+    let path = root.join(format!("{}.json", voice.context.run_id));
+    let delivered = if request.existing_run_record.is_some() {
+        retained_delivery(&path, voice)?
+    } else {
+        voice.delivered.clone()
+    };
     let mut home: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     if home["interface_state"]
         .get(&voice.context.provider_id)
@@ -364,7 +431,7 @@ pub(super) fn wire(
         BoundCheckpointRole::Stable,
         &voice.context.delegation_interface_id,
         &identity.model_interface_id,
-        &["realtime.delegation".into()],
+        &delivered,
     )?;
     delegation.static_artifact_bindings = context_ids
         .iter()
@@ -412,12 +479,16 @@ pub(super) fn wire(
             &voice.context.control_interface_id,
             &voice.outputs,
         )?,
-        route(
+    ];
+    for label in &delivered {
+        templates.push(route(
             BoundCheckpointRole::ProviderInterfaceOutput,
             &voice.context.provider_id,
             &voice.context.delegation_interface_id,
-            &["realtime.delegation".into()],
-        )?,
+            std::slice::from_ref(label),
+        )?);
+    }
+    templates.extend([
         route(
             BoundCheckpointRole::IndependentInput,
             &home_outputs::interfaces(identity)[1],
@@ -441,15 +512,7 @@ pub(super) fn wire(
             ))],
             Vec::new(),
         )?,
-    ];
-    let root = require_absolute(
-        "run_records_root",
-        request
-            .run_records_root
-            .as_deref()
-            .ok_or("Home voice needs run_records_root")?,
-    )?;
-    let path = root.join(format!("{}.json", voice.context.run_id));
+    ]);
     if let Some(existing) = request.existing_run_record.as_ref() {
         if existing["interface_state"][&identity.chat_interface_id]["voice_context"]
             != json!(voice.context)

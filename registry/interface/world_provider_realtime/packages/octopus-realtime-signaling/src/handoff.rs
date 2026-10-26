@@ -337,6 +337,23 @@ fn expected_outbound(
     }
 }
 
+/// Whether the voice run authors a provider interface output route that
+/// carries `label` to exactly `destination`.
+pub(crate) fn authors_interface_output(record: &[u8], provider: &InterfaceId, label: &str, destination: &str) -> bool {
+    let probe = PendingEmission {
+        correlation_id: None,
+        label: label.into(),
+        body: Value::Null,
+        delegated: true,
+        observation: true,
+        terminal: false,
+        source_seq: 0,
+        destination: Some(destination.into()),
+        delivery: None,
+    };
+    provider_record(record, provider).is_ok_and(|record| expected_outbound(&record, provider, &probe).is_ok())
+}
+
 fn recovered_admission(
     record: &ProviderRecord,
     provider: &InterfaceId,

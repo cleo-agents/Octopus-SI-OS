@@ -24,6 +24,7 @@ pub const SESSION_ANSWER_LABEL: &str = "realtime.session.answer";
 pub const SESSION_UPDATE_LABEL: &str = "realtime.session.update";
 pub const SESSION_STOP_LABEL: &str = "realtime.session.stop";
 pub const SESSION_RECORDING_LABEL: &str = "realtime.session.recording";
+pub const CALL_TRANSCRIPT_LABEL: &str = "realtime.call.transcript";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

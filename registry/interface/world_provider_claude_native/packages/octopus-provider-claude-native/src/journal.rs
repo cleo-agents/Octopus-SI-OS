@@ -18,6 +18,17 @@ pub struct RunSession {
     pub claude_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inflight: Option<InflightTurn>,
+    /// Context inputs admitted since the run's last turn started, in
+    /// arrival order; the next turn receives them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_context: Vec<QueuedContext>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct QueuedContext {
+    pub artifact: serde_json::Value,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -109,6 +120,30 @@ impl Journal {
             return Ok(());
         }
         entry.inflight = inflight;
+        self.save()
+    }
+
+    pub fn queued_context(&self, run: &str) -> Vec<QueuedContext> {
+        self.state.runs.get(run).map(|entry| entry.queued_context.clone()).unwrap_or_default()
+    }
+
+    pub fn queue_context(&mut self, run: &str, context: QueuedContext) -> Result<(), String> {
+        let entry = self.state.runs.entry(run.to_string()).or_default();
+        if entry.queued_context.iter().any(|queued| queued.artifact == context.artifact) {
+            return Ok(());
+        }
+        entry.queued_context.push(context);
+        self.save()
+    }
+
+    /// Forgets the queued context a started turn delivered.
+    pub fn take_queued_context(&mut self, run: &str, delivered: &[QueuedContext]) -> Result<(), String> {
+        let Some(entry) = self.state.runs.get_mut(run) else { return Ok(()) };
+        let before = entry.queued_context.len();
+        entry.queued_context.retain(|queued| !delivered.contains(queued));
+        if entry.queued_context.len() == before {
+            return Ok(());
+        }
         self.save()
     }
 

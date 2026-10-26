@@ -91,6 +91,12 @@
       "provider_event_id",
       "client_context"
     ],
+    "realtime.call.transcript": [
+      "correlation_id",
+      "call_id",
+      "transcript",
+      "boundary"
+    ],
     "realtime.session.updated": [
       "correlation_id",
       "call_id",
@@ -122,7 +128,7 @@
   },
   "integration": {
     "media": "Browser owns microphone, peer connection and playback. Provider life owns HTTP call creation and authenticated WebSocket sideband; credentials never enter artifacts or renderer. Sideband availability is not media connectivity or heard-audio proof. The client keeps microphone tracks disabled and stays connecting until both its WebRTC connection and an admitted provider session.started/session.updated event confirm readiness. Call creation returns its SDP with sideband_connected=false before joining the sideband, so media can activate the remote session. A 404 on this newly created call is retried within request_timeout_ms and reconnect_attempts, without creating another call. Other attachment refusals remain explicit failures.",
-    "semantic_delivery": "Delegations leave the exact provider interface through a provider_interface_output checkpoint to offer.delegation_interface. Other outputs use provider_artifact_output/client projection. UI never resubmits semantic events as text.",
+    "semantic_delivery": "Delegations leave the exact provider interface through a provider_interface_output checkpoint to offer.delegation_interface. When the run authors such a route for realtime.call.transcript to the same interface, the call's complete transcript leaves it once, when the call closes, so the receiving conversation keeps what was said. Other outputs use provider_artifact_output/client projection. UI never resubmits semantic events as text.",
     "rearming": "Provider imports existing octopus-run-authoring ProviderHandoffSession/ProviderOutputHandoff; configure interface_state[exact-provider].run_authoring_binding schema_version=2 and ordinary file.write tool/room/checkpoints. This includes authoring_call/result, provider_artifact_output, provider_interface_output and control independent_input/owner_input edges. Provider requires run_records_root and interface_hand_in_root handles plus app_server_control_root coordinate and local IPC for the separately activated exact authoring source.",
     "auth": "private_config.auth={mode:codex_machine,auth_file_env:OCTOPUS_MACHINE_CODEX_AUTH_FILE} imports the existing Codex login owner over the same canonical auth.json; life must inherit and allow read/write of that declared path. No separate credential copy. Public API uses explicit bearer_env config with its own env_key; no automatic auth or protocol fallback.",
     "wire": "transport.wire=live_webrtc. codex_live: JSON POST to declared https://chatgpt.com/backend-api/codex/realtime/calls with intent=quicksilver and architecture=avas; raw SDP + Location call identity; sideband wss://api.openai.com/v1/live/{call_id}. openai_live CURRENT public API: JSON POST to https://api.openai.com/v1/live/sessions containing session and transport={type:webrtc,sdp}; response session.id and transport.sdp; sideband declared wss://api.openai.com/v1/live/sessions/{call_id}/attach. The older Codex public /v1/live multipart path is not the current public API contract. Explicit protocol adapters only; no endpoint/protocol guessing. Codex Live explicitly requires transport.headers.OpenAI-Alpha=quicksilver=v2 on both call creation and sideband attachment.",

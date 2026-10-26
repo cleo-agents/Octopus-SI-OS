@@ -533,6 +533,15 @@ async fn home_accepts_independent_task_terminal_and_error_returns_through_real_a
     assert!(log.read_from(Seq(delegated_from as u64)).iter().any(|m|
         m.kind == MovementKind::InterfaceOutbound && m.to == Endpoint::Interface(plan.model_interface_id.clone().into())
         && m.runtime().is_some_and(|meta| meta.run.as_str() == plan.run_id)), "Voice delegates into the independent Home Run");
+    let transcript = json!({"call_id":"admitted-call","correlation_id":"admitted-offer","boundary":"call_closed",
+        "transcript":[{"id":"admitted-offer:transcript:0","role":"user","text":"Remember the word OCELOT","complete":true}]});
+    let closed = InterfaceArtifactFile::write(root.join("call-transcript"), "realtime.call.transcript", &serde_json::to_vec(&transcript).unwrap())
+        .unwrap().capture_bounded(1048576, 67108864).unwrap();
+    let closed_from = log.len();
+    admit_interface_artifact_arrival(&embedded, &mut log, &mut handle, &closed, &voice["provider_id"].as_str().unwrap().into()).await.unwrap();
+    assert!(log.read_from(Seq(closed_from as u64)).iter().any(|m|
+        m.kind == MovementKind::InterfaceOutbound && m.to == Endpoint::Interface(plan.model_interface_id.clone().into())
+        && m.runtime().is_some_and(|meta| meta.run.as_str() == plan.run_id)), "A call's final transcript reaches Home's text provider in the Home Run");
     let mut home_ctx = ctx.clone();
     home_ctx.interface = plan.model_interface_id.clone().into();
     home_ctx.interface_dir = registry.join("interface").join(&plan.model_interface_id);

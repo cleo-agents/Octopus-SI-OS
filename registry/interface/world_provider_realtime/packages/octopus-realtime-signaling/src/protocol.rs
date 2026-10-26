@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::state::{Call, TranscriptEntry};
-use crate::{LiveProtocol, SessionUpdate, UpdateChannel};
+use crate::{CALL_TRANSCRIPT_LABEL, LiveProtocol, SessionUpdate, UpdateChannel};
 
 pub fn update_frames(protocol: LiveProtocol, update: &SessionUpdate) -> Result<Vec<Value>, String> {
     if update.client_context.is_some() {
@@ -115,6 +115,7 @@ pub(crate) fn accept_event(
         "session.closed" => {
             call.status = "closed".into();
             output.extend(seal_transcripts(call, "call_closed"));
+            output.extend(call_transcript(call, "call_closed"));
             output.push(("realtime.session.closed".into(),call.event_body(json!({"provider_close_sent":false,"remote_closed":true,"transcript":call.transcript})),false));
         }
         "octopus.transport.stopped" => {
@@ -125,6 +126,7 @@ pub(crate) fn accept_event(
             }
             .into();
             output.extend(seal_transcripts(call, "transport_stopped"));
+            output.extend(call_transcript(call, "transport_stopped"));
             output.push(("realtime.session.closed".into(),call.event_body(json!({"provider_close_sent":event.get("provider_close_sent"),"remote_closed":event.get("remote_closed"),"transcript":call.transcript})),false));
         }
         "error" => {
@@ -323,4 +325,14 @@ pub(crate) fn seal_transcripts(call: &mut Call, boundary: &str) -> Vec<(String, 
         })
         .collect();
     entries.into_iter().map(|entry|("realtime.transcript".into(),call.event_body(json!({"id":entry.id,"role":entry.role,"text":entry.text,"final":true,"boundary":boundary,"provider_turn_complete":false})),false)).collect()
+}
+
+/// The call's final transcript, once per call, for the delegation interface
+/// when the run authors that route.
+pub(crate) fn call_transcript(call: &mut Call, boundary: &str) -> Option<(String, Value, bool)> {
+    if !call.hands_transcript || call.transcript_handed || call.transcript.is_empty() {
+        return None;
+    }
+    call.transcript_handed = true;
+    Some((CALL_TRANSCRIPT_LABEL.into(), call.event_body(json!({"transcript":call.transcript,"boundary":boundary})), true))
 }

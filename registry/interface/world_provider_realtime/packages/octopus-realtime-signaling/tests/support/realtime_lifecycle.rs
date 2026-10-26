@@ -44,6 +44,8 @@ fn call() -> Call {
         stops: BTreeMap::new(),
         client_context: None,
         session_configuration: None,
+        hands_transcript: false,
+        transcript_handed: false,
     }
 }
 
@@ -1123,4 +1125,33 @@ async fn cancellation_closes_all_calls_concurrently_and_keeps_confirmation_separ
     .unwrap_err()
     .contains("unique exact"));
     assert_eq!(store.state.calls["offer"].status, "failed");
+}
+
+#[test]
+fn a_closed_call_hands_its_final_transcript_once_where_the_run_routes_it() {
+    for protocol in [LiveProtocol::CodexLive, LiveProtocol::OpenaiLive] {
+        for routed in [true, false] {
+            let mut call = call();
+            call.hands_transcript = routed;
+            let said = if protocol == LiveProtocol::CodexLive {
+                json!({"type":"input_transcript.added","event_id":"u1","item":{"text":"Remember OCELOT"}})
+            } else {
+                json!({"type":"session.input_transcript.delta","event_id":"u1","delta":"Remember OCELOT"})
+            };
+            accept_event(protocol, &mut call, &said, 1_000_000).unwrap();
+            let closed = accept_event(protocol, &mut call, &json!({"type":"session.closed"}), 1_000_000).unwrap();
+            let handed = closed.iter().filter(|(label, _, _)| label == "realtime.call.transcript").collect::<Vec<_>>();
+            if routed {
+                let [(_, body, delegated)] = handed.as_slice() else { panic!("one call transcript expected") };
+                assert!(*delegated);
+                assert_eq!(body["call_id"], "rtc_fixture");
+                assert_eq!(body["transcript"][0]["text"], "Remember OCELOT");
+                assert_eq!(body["transcript"][0]["complete"], true);
+            } else {
+                assert!(handed.is_empty());
+            }
+            let stopped = accept_event(protocol, &mut call, &json!({"type":"octopus.transport.stopped","remote_closed":true}), 1_000_000).unwrap();
+            assert!(stopped.iter().all(|(label, _, _)| label != "realtime.call.transcript"));
+        }
+    }
 }

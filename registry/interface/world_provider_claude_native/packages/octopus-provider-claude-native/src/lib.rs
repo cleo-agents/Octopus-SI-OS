@@ -9,9 +9,9 @@ mod stream;
 mod tools;
 
 pub use child::{ChildError, Event, Item, ItemKind, ReadyInfo, SdkChild, SessionConfig, TextInput, ToolSpec, TurnStatus, Usage};
-pub use config::{ClaudeNativeConfig, InputMessage, RequestContextKind, SDK_CHILD_PROTOCOL, verify_claude_grant, verify_sdk_child};
+pub use config::{ClaudeNativeConfig, InputDisposition, InputMessage, RequestContextKind, SDK_CHILD_PROTOCOL, verify_claude_grant, verify_sdk_child};
 pub use input::{DecodedInput, artifact_turn_text, decode as decode_input};
-pub use journal::{InflightTurn, Journal, PendingCallRecord, RunSession};
+pub use journal::{InflightTurn, Journal, PendingCallRecord, QueuedContext, RunSession};
 pub use controls::{ControlResult, TurnControl, interrupted_result_payload};
 pub use life::interface_life;
 pub use stream::{LiveTurn, identity_hash as stream_identity_hash, retire_open_streams};

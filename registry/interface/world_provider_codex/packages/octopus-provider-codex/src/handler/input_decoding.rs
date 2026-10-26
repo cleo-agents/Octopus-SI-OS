@@ -505,6 +505,7 @@ pub(crate) fn is_explicit_turn_control_label(label: &str) -> bool {
 
 pub(crate) fn is_inflight_turn_control_candidate_label(label: &str, descriptor: &InterfaceDescriptor) -> bool {
     label == OPERATOR_MESSAGE_LABEL || is_declared_input_message(descriptor, label)
+        || is_declared_context_message(descriptor.interface_driver_config.as_ref().map(|config| &config.private_config), label)
         || is_explicit_turn_control_label(label) || peer_notification_label(label)
 }
 
@@ -515,11 +516,25 @@ pub(crate) fn peer_notification_label(label: &str) -> bool {
 }
 
 
-pub(crate) fn admitted_peer_message(input: &InterfaceInvocationEnvelope, selection: Option<&serde_json::Value>) -> Result<Option<PeerMessage>, InterfaceDriverError> {
+pub(crate) fn admitted_peer_message(input: &InterfaceInvocationEnvelope, config: Option<&serde_json::Map<String, serde_json::Value>>) -> Result<Option<PeerMessage>, InterfaceDriverError> {
+    let selection = config.and_then(|config| config.get("input_intake"));
     let metadata = input.metadata()?;
     let runtime = metadata.runtime.as_ref().ok_or_else(|| InterfaceDriverError::FailedClosed("peer message has no runtime identity".into()))?;
     let inbound = metadata.checkpoint_binding_policy.as_ref().map(|binding| &binding.inbound.interface);
     let label = input.read_artifact_manifest()?.label;
+    if let Some(config) = config.filter(|config| is_declared_context_message(Some(config), &label)) {
+        let decoded = decode_input_message(config, &label, &input.read_artifact_payload()?, None)?
+            .ok_or_else(|| InterfaceDriverError::FailedClosed(format!("declared context input '{label}' has no contract")))?;
+        let text = decoded.input.iter().filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        }).collect::<Vec<_>>().join("\n\n");
+        return Ok(Some(PeerMessage {
+            action: PeerAction::Queue,
+            control_id: decoded.control_id.unwrap_or_else(|| input.artifact.id.as_str().into()),
+            text: Some(text), artifacts: vec![input.artifact.clone()],
+        }));
+    }
     if label == octopus_operator_chat_client::input_intake::INPUT_INTAKE_LABEL {
         let endpoint = selection.and_then(|selection| selection.get("interface_id")).and_then(serde_json::Value::as_str).filter(|id| !id.is_empty()).ok_or_else(|| InterfaceDriverError::FailedClosed("intake delivery has no selected concrete endpoint".into()))?;
         if inbound.is_none_or(|id| id.as_str() != endpoint) { return Err(InterfaceDriverError::FailedClosed("intake delivery did not arrive through its exact selected endpoint".into())); }
@@ -566,7 +581,7 @@ pub(crate) fn queued_peer_item(text: String) -> serde_json::Value {
 }
 
 pub(crate) fn is_admitted_peer_interrupt(input: &InterfaceInvocationEnvelope, descriptor: &InterfaceDescriptor) -> bool {
-    matches!(admitted_peer_message(input, descriptor.interface_driver_config.as_ref().and_then(|c| c.private_config.get("input_intake"))), Ok(Some(PeerMessage { action: PeerAction::Interrupt, .. })))
+    matches!(admitted_peer_message(input, descriptor.interface_driver_config.as_ref().map(|c| &c.private_config)), Ok(Some(PeerMessage { action: PeerAction::Interrupt, .. })))
 }
 
 pub(crate) fn decode_inflight_turn_control(
@@ -581,7 +596,7 @@ pub(crate) fn decode_inflight_turn_control(
     })?;
     let bytes = input.read_artifact_payload()?;
     let input_message = manifest.label == OPERATOR_MESSAGE_LABEL || is_declared_input_message(descriptor, &manifest.label);
-    if !input_message && let Some(peer) = admitted_peer_message(input, descriptor.interface_driver_config.as_ref().and_then(|c| c.private_config.get("input_intake")))? {
+    if !input_message && let Some(peer) = admitted_peer_message(input, descriptor.interface_driver_config.as_ref().map(|c| &c.private_config))? {
         return Ok(Some(match peer.action {
             PeerAction::Queue => CodexTurnControl::Inject {
                 control_id: peer.control_id.clone(), items: vec![queued_peer_item(peer_input_text(&peer, &input.artifact)?)],

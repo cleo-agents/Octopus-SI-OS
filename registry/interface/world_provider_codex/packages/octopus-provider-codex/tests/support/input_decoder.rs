@@ -70,7 +70,8 @@ fn arbitrary_json_is_artifact_data_but_operator_envelopes_remain_strict() {
 #[test]
 fn input_template_does_not_claim_operator_messages_but_input_delivery_needs_exact_endpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let selection = serde_json::json!({"template_interface_id":"system_service_input"});
+    let config = |intake: serde_json::Value| serde_json::json!({"input_intake": intake}).as_object().unwrap().clone();
+    let selection = config(serde_json::json!({"template_interface_id":"system_service_input"}));
     let make = |label: &str, from: &str, payload: serde_json::Value| {
         let file =
             InterfaceArtifactFile::write(dir.path(), label, &serde_json::to_vec(&payload).unwrap())
@@ -101,7 +102,7 @@ fn input_template_does_not_claim_operator_messages_but_input_delivery_needs_exac
     assert!(admitted_peer_message(&input, None).is_err());
     assert!(admitted_peer_message(&input, Some(&selection)).is_err());
     let exact =
-        serde_json::json!({"template_interface_id":"system_service_input","interface_id":"intake"});
+        config(serde_json::json!({"template_interface_id":"system_service_input","interface_id":"intake"}));
     assert_eq!(
         admitted_peer_message(&input, Some(&exact))
             .unwrap()
@@ -115,4 +116,31 @@ fn input_template_does_not_claim_operator_messages_but_input_delivery_needs_exac
         body,
     );
     assert!(admitted_peer_message(&wrong, Some(&exact)).is_err());
+}
+
+#[test]
+fn context_disposition_inputs_queue_without_a_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    for source in [include_str!("../../../../interface.json"), include_str!("../../../../../world_provider_chatgpt/interface.json")] {
+        let descriptor: InterfaceDescriptor = serde_json::from_str(source).unwrap();
+        let label = "realtime.call.transcript";
+        assert!(!is_declared_input_message(&descriptor, label));
+        assert!(is_inflight_turn_control_candidate_label(label, &descriptor));
+        let config = &descriptor.interface_driver_config.as_ref().unwrap().private_config;
+        let payload = serde_json::json!({"call_id":"call-1", "correlation_id":"offer-1",
+            "transcript":[{"id":"t0","role":"user","text":"Remember the word OCELOT","complete":true}]});
+        let input = InterfaceInvocationEnvelope {
+            artifact: ArtifactRef { id: "transcript".into(), content: ContentHash::of_bytes(b"transcript") },
+            artifact_file: InterfaceArtifactFile::write(dir.path(), label, &serde_json::to_vec(&payload).unwrap()).unwrap(),
+            artifact_binding_payloads: Default::default(),
+            metadata: Some(serde_json::from_value(serde_json::json!({"runtime":{"run":"run","ee":"ee","worker":"worker","checkpoint":"input","interface":"provider","epoch":0},"checkpoint_binding_policy":{"inbound":{"interface":"system_worker_home_voice_delegation_x","config":{"artifact_policy":{"mode":"all"}}},"outbound":[]}})).unwrap()),
+        };
+        let message = admitted_peer_message(&input, Some(config)).unwrap().unwrap();
+        assert_eq!(message.action, PeerAction::Queue);
+        assert_eq!(message.control_id, "call-1");
+        assert!(message.text.as_deref().unwrap().contains("Remember the word OCELOT"));
+        assert_eq!(message.artifacts, vec![input.artifact.clone()]);
+        let missing = serde_json::json!({"call_id":"call-1", "transcript":[]});
+        assert!(decode_input_message(config, label, &serde_json::to_vec(&missing).unwrap(), None).is_err());
+    }
 }

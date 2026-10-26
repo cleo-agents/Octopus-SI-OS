@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use octopus_interfaces::InterfaceDescriptor;
-use octopus_provider_claude_native::{ClaudeNativeConfig, decode_input};
+use octopus_provider_claude_native::{ClaudeNativeConfig, InputDisposition, decode_input};
 use serde_json::{Value, json};
 
 fn declared() -> Value {
@@ -137,4 +137,24 @@ fn an_undeclared_artifact_reaches_claude_by_the_codex_rule() {
     assert_eq!(rendered["artifact"]["label"], "memory.experience.input");
     assert_eq!(rendered["artifact"]["source_interface"], "system_context_projection_m");
     assert_eq!(rendered["artifact"]["payload"], experience, "the payload reaches the model whole");
+}
+
+#[test]
+fn a_call_transcript_is_declared_context_like_the_codex_contract() {
+    let ours = declared();
+    let codex: Value = serde_json::from_slice(
+        &std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../world_provider_codex/interface.json")).unwrap(),
+    )
+    .unwrap();
+    let pointer = "/interface_driver_config/private_config/input_messages/realtime.call.transcript";
+    assert_eq!(ours.pointer(pointer), codex.pointer(pointer));
+    let config = config(&ours).unwrap();
+    let contract = &config.input_messages["realtime.call.transcript"];
+    assert_eq!(contract.disposition, InputDisposition::Context);
+    assert_eq!(config.input_messages["realtime.delegation"].disposition, InputDisposition::Turn);
+    let payload = json!({"call_id": "call-1", "correlation_id": "offer-1",
+        "transcript": [{"id": "t0", "role": "user", "text": "Remember the word OCELOT", "complete": true}]});
+    let decoded = decode_input("realtime.call.transcript", contract, &payload).unwrap();
+    assert_eq!(decoded.identity.as_deref(), Some("call-1"));
+    assert!(decoded.prompt_text().contains("Remember the word OCELOT"));
 }

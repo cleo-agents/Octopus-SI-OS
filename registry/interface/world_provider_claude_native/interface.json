@@ -539,6 +539,18 @@
           "request_context_fields": {
             "transcript": "array"
           }
+        },
+        "realtime.call.transcript": {
+          "text_fields": [],
+          "identity_field": "call_id",
+          "identity_required": true,
+          "context_fields": [
+            "correlation_id"
+          ],
+          "request_context_fields": {
+            "transcript": "array"
+          },
+          "disposition": "context"
         }
       },
       "run_authoring_profile": {

@@ -8,7 +8,7 @@ pub(crate) fn recover_provider_turn_continuity(
     pinned_run_record: &[u8],
 ) -> Result<Option<CodexContinuityState>, InterfaceDriverError> {
     let manifest = input.read_artifact_manifest()?;
-    let peer = admitted_peer_message(input, descriptor.interface_driver_config.as_ref().and_then(|c| c.private_config.get("input_intake")))?;
+    let peer = admitted_peer_message(input, descriptor.interface_driver_config.as_ref().map(|c| &c.private_config))?;
     if !is_provider_turn_input(descriptor, input)? {
         return Err(InterfaceDriverError::FailedClosed(format!(
             "deferred provider turn source '{}' is not a new provider turn",

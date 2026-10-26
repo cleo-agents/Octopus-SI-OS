@@ -177,7 +177,7 @@ impl CodexAppServerInterfaceDriver {
         };
         sink.continuity.lock().expect("continuity lock").pending_input_context = input_changes_context;
         let manifest = input.read_artifact_manifest()?;
-        let peer_message = admitted_peer_message(&input, self.interface_private_config.get("input_intake"))?;
+        let peer_message = admitted_peer_message(&input, Some(&self.interface_private_config))?;
         let lifecycle_inbound = decode_lifecycle_inbound(&manifest.label, &request_bytes)
             .map_err(InterfaceDriverError::Protocol)?;
         let thread_compact_requested = peer_message.is_none() && self.configured_thread_compact_request(&manifest.label)?;

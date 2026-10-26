@@ -164,6 +164,8 @@ fn setup(root: &Path) -> Store {
             stops: BTreeMap::new(),
             client_context: None,
             session_configuration: None,
+            hands_transcript: false,
+            transcript_handed: false,
         },
     );
     store

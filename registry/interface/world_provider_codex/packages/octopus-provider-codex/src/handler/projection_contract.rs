@@ -172,7 +172,7 @@ pub(crate) fn is_provider_turn_input(
         InterfaceDriverError::FailedClosed("provider descriptor has no driver configuration".into())
     })?;
     if is_declared_input_message(descriptor, &manifest.label) { return Ok(true); }
-    if let Some(peer) = admitted_peer_message(input, config.private_config.get("input_intake"))? {
+    if let Some(peer) = admitted_peer_message(input, Some(&config.private_config))? {
         return Ok(peer.action != PeerAction::Interrupt);
     }
     if is_explicit_turn_control_label(&manifest.label)

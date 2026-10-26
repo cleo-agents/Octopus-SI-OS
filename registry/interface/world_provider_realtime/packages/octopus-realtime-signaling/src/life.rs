@@ -12,13 +12,13 @@ use octopus_world_pyecho_life_runtime::{LedgerReplayReader, LedgerTailReader};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::handoff::{advance_source, flush, queue, queue_refusal};
-use crate::protocol::{accept_event, seal_transcripts, update_frames};
+use crate::handoff::{EmissionHandoff, advance_source, flush, queue, queue_refusal};
+use crate::protocol::{accept_event, call_transcript, seal_transcripts, update_frames};
 use crate::state::{Call, Operation, Store};
 use crate::wire::{CallCreationFailure, LiveClient, SidebandCommand, SidebandEvent};
 use crate::{
     formed_provider_model, load_door_config, merge_session, validate_identity, RealtimeDoorConfig,
-    SessionOffer, SessionRecording, SessionStop, SessionUpdate, SESSION_ANSWER_LABEL,
+    SessionOffer, SessionRecording, SessionStop, SessionUpdate, CALL_TRANSCRIPT_LABEL, SESSION_ANSWER_LABEL,
     SESSION_OFFER_LABEL, SESSION_RECORDING_LABEL, SESSION_STOP_LABEL, SESSION_UPDATE_LABEL,
 };
 
@@ -311,6 +311,12 @@ pub(crate) async fn door_life(ctx: InterfaceLiftContext) -> Result<(), String> {
                         {
                             Err("voice delegation interface is outside the formed grant".into())
                         } else {
+                            let hands_transcript = crate::handoff::authors_interface_output(
+                                &handoff.record().await,
+                                &ctx.interface,
+                                CALL_TRANSCRIPT_LABEL,
+                                &offer.delegation_interface,
+                            );
                             let result = offer_call(
                                 &config,
                                 &mut store,
@@ -324,6 +330,7 @@ pub(crate) async fn door_life(ctx: InterfaceLiftContext) -> Result<(), String> {
                             if let Some(call) = store.state.calls.get_mut(&offer.correlation_id) {
                                 if result.is_ok() {
                                     call.source_seq = own.movement.seq.0;
+                                    call.hands_transcript |= hands_transcript;
                                 }
                                 handoffs.insert(own.movement.seq.0, handoff.clone());
                             }
@@ -540,7 +547,8 @@ async fn close_controls(
                 let confirmed = remote_closure_confirmed(store, &correlation, &outcome);
                 let call = store.state.calls.get_mut(&correlation).ok_or("call disappeared")?;
                 call.status = if confirmed { "closed" } else { "failed" }.into();
-                let sealed = seal_transcripts(call, "interface_stopped");
+                let mut sealed = seal_transcripts(call, "interface_stopped");
+                sealed.extend(call_transcript(call, "interface_stopped"));
                 let body = call.event_body(json!({"provider_close_sent":outcome.is_ok(),"remote_closed":confirmed,"reason":"interface_stopped","error":outcome.err(),"transcript":call.transcript}));
                 for (label, body, delegated) in sealed {
                     queue(store, &correlation, &label, body, delegated, true)?;
@@ -584,7 +592,9 @@ fn recover_uncertain_operations(store: &mut Store, correlation: &str) -> Result<
     let sealed = if stops.is_empty() {
         Vec::new()
     } else {
-        seal_transcripts(call, "interrupted_stop")
+        let mut sealed = seal_transcripts(call, "interrupted_stop");
+        sealed.extend(call_transcript(call, "interrupted_stop"));
+        sealed
     };
     let confirmed = call.remote_closed();
     for id in stops {
@@ -719,6 +729,8 @@ async fn offer_call(
             stops: BTreeMap::new(),
             client_context: offer.client_context,
             session_configuration: Some(session_configuration),
+            hands_transcript: false,
+            transcript_handed: false,
         },
     );
     store.save()?;
@@ -1009,7 +1021,8 @@ async fn stop_call(
         .get_mut(&stop.correlation_id)
         .ok_or("call disappeared")?;
     call.status = if confirmed { "closed" } else { "failed" }.into();
-    let sealed = seal_transcripts(call, "local_stop");
+    let mut sealed = seal_transcripts(call, "local_stop");
+    sealed.extend(call_transcript(call, "local_stop"));
     let body=call.event_body(json!({"stop_id":stop.stop_id,"ok":confirmed,"provider_close_sent":!already_closed && sent.is_ok(),"remote_closed":confirmed,"sideband_reattached":reattached,"error":sent.err(),"transcript":call.transcript}));
     call.stops
         .get_mut(&stop.stop_id)

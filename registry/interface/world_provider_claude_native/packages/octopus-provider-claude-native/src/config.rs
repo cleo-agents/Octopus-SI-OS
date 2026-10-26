@@ -33,6 +33,18 @@ pub struct InputMessage {
     pub context_fields: Vec<String>,
     #[serde(default)]
     pub request_context_fields: BTreeMap<String, RequestContextKind>,
+    #[serde(default)]
+    pub disposition: InputDisposition,
+}
+
+/// Whether a declared input starts a Claude turn, or joins the run's
+/// conversation as context that the next turn receives.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputDisposition {
+    #[default]
+    Turn,
+    Context,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

@@ -15,6 +15,16 @@ pub(crate) struct InputMessageContract {
     context_fields: Vec<String>,
     #[serde(default)]
     request_context_fields: BTreeMap<String, InputMessageContextKind>,
+    #[serde(default)]
+    disposition: InputMessageDisposition,
+}
+
+#[derive(serde::Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum InputMessageDisposition {
+    #[default]
+    Turn,
+    Context,
 }
 
 #[derive(serde::Deserialize)]
@@ -52,11 +62,20 @@ pub(crate) fn input_message_contracts(
     Ok(contracts)
 }
 
+fn declared_disposition(config: Option<&serde_json::Map<String, serde_json::Value>>, label: &str) -> Option<InputMessageDisposition> {
+    input_message_contracts(config?).ok()?.remove(label).map(|contract| contract.disposition)
+}
+
+/// A declared input that starts a model turn.
 pub(crate) fn is_declared_input_message(descriptor: &InterfaceDescriptor, label: &str) -> bool {
-    descriptor.interface_driver_config.as_ref()
-        .and_then(|config| config.private_config.get("input_messages"))
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|contracts| contracts.contains_key(label))
+    let config = descriptor.interface_driver_config.as_ref().map(|config| &config.private_config);
+    declared_disposition(config, label) == Some(InputMessageDisposition::Turn)
+}
+
+/// A declared input with `disposition: "context"`: it joins the conversation
+/// as queued context and starts no turn.
+pub(crate) fn is_declared_context_message(config: Option<&serde_json::Map<String, serde_json::Value>>, label: &str) -> bool {
+    declared_disposition(config, label) == Some(InputMessageDisposition::Context)
 }
 
 pub(crate) fn decode_input_message(

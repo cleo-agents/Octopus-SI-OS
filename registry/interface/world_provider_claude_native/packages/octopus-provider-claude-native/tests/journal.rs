@@ -1,4 +1,4 @@
-use octopus_provider_claude_native::{InflightTurn, Journal, PendingCallRecord};
+use octopus_provider_claude_native::{InflightTurn, Journal, PendingCallRecord, QueuedContext};
 
 #[test]
 fn a_journal_keeps_the_session_and_the_turn_in_flight_across_lives() {
@@ -46,4 +46,20 @@ fn a_journal_written_before_turns_were_recorded_still_opens() {
     assert_eq!(journal.claude_session_id("run_old").as_deref(), Some("claude-0"));
     assert!(journal.inflight("run_old").is_none());
     assert!(!journal.control_handled(1));
+}
+
+#[test]
+fn queued_context_waits_for_the_next_turn_across_lives() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = QueuedContext { artifact: serde_json::json!({"id": "realtime.call.transcript:a"}), text: "OCELOT".into() };
+    {
+        let mut journal = Journal::open(dir.path(), 64 * 1024).unwrap();
+        journal.queue_context("run_a", transcript.clone()).unwrap();
+        journal.queue_context("run_a", transcript.clone()).unwrap();
+    }
+    let mut journal = Journal::open(dir.path(), 64 * 1024).unwrap();
+    assert_eq!(journal.queued_context("run_a"), vec![transcript.clone()]);
+    assert!(journal.queued_context("run_b").is_empty());
+    journal.take_queued_context("run_a", &[transcript]).unwrap();
+    assert!(Journal::open(dir.path(), 64 * 1024).unwrap().queued_context("run_a").is_empty());
 }

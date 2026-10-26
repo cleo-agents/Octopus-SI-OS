@@ -294,7 +294,14 @@ present. `context_fields` names required accompanying data.
 `request_context_fields` maps structured request fields to `array` or `object`;
 when text is absent, nonempty declared request context carries the request. The
 provider preserves the complete structured payload instead of selecting or
-rewriting a transcript line.
+rewriting a transcript line. `disposition` is `turn` by default; a `context`
+input starts no model turn. The provider queues it into the conversation for
+the next turn and records `interface.context.updated` with `turn_triggered:
+false`. Home's text providers declare `realtime.call.transcript` this way: when
+a call closes, the voice run hands its complete transcript to Home through the
+delegation interface, so the next text message continues from what was said.
+The Home planner authors that route only when the text provider declares it,
+and a retained Home keeps the routes its voice run was authored with.
 
 Native user-input requests cross the provider's declared question and answer
 artifacts. The client renders the question and returns the selected or written

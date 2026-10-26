@@ -41,6 +41,12 @@ pub struct Call {
     pub client_context: Option<Vec<crate::ClientContextEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_configuration: Option<Value>,
+    /// Whether the run authors a route that carries this call's final
+    /// transcript to its delegation interface, and whether it was handed.
+    #[serde(default)]
+    pub hands_transcript: bool,
+    #[serde(default)]
+    pub transcript_handed: bool,
 }
 
 impl Call {
